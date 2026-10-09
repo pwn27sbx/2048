@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "id": "pwnsxb.2048",
+  "name": "2048",
+  "version": "1.0.0",
+  "author": "pwnsxb",
+  "license": "MIT",
+  "description": "The classic 2048 sliding-tile game in a keyboard-driven, theme-aware Omarchy bar panel.",
+  "kinds": ["bar-widget"],
+  "entryPoints": { "barWidget": "BarWidget.qml" },
+  "barWidget": {
+    "displayName": "2048",
+    "description": "Slide and merge tiles to reach 2048.",
+    "category": "Games",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
