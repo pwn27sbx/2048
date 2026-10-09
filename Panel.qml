@@ -522,42 +522,55 @@ Panel {
             border.width: Math.max(1, Style.normalBorderWidth)
             border.color: Color.popups.border
 
-            Column {
+            // Opaque card behind the text so board numbers can't show through
+            // and make the lines hard to read.
+            Rectangle {
               anchors.centerIn: parent
-              spacing: Style.space(8)
+              color: Color.popups.background
+              radius: Style.cornerRadius
+              border.width: Math.max(1, Style.normalBorderWidth)
+              border.color: Color.popups.border
+              implicitWidth: overlayColumn.implicitWidth + Style.space(12) * 2
+              implicitHeight: overlayColumn.implicitHeight + Style.space(12) * 2
 
-              Text {
-                anchors.horizontalCenter: parent.horizontalCenter
-                text: root.game.status === Game.STATUS_WON ? "You made 2048!" : "No moves left"
-                color: Color.foreground
-                font.family: Style.font.family
-                font.bold: true
-                font.pixelSize: Style.font.title
-              }
+              Column {
+                id: overlayColumn
+                anchors.centerIn: parent
+                spacing: Style.space(8)
 
-              Text {
-                anchors.horizontalCenter: parent.horizontalCenter
-                text: "Score " + root.game.score + " · Best tile " + Game.maxTile(root.game.cells)
-                color: Color.foreground
-                font.family: Style.font.family
-                font.pixelSize: Style.font.body
-              }
+                Text {
+                  anchors.horizontalCenter: parent.horizontalCenter
+                  text: root.game.status === Game.STATUS_WON ? "You made 2048!" : "No moves left"
+                  color: Color.foreground
+                  font.family: Style.font.family
+                  font.bold: true
+                  font.pixelSize: Style.font.title
+                }
 
-              Text {
-                anchors.horizontalCenter: parent.horizontalCenter
-                visible: root.game.lastRank > 0
-                text: root.game.lastRank === 1 ? "New record!" : "Rank #" + root.game.lastRank + " in your top 10"
-                color: root.game.lastRank === 1 ? Color.accent : Color.foreground
-                font.family: Style.font.family
-                font.pixelSize: Style.font.body
-              }
+                Text {
+                  anchors.horizontalCenter: parent.horizontalCenter
+                  text: "Score " + root.game.score + " · Best tile " + Game.maxTile(root.game.cells)
+                  color: Color.foreground
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.body
+                }
 
-              Text {
-                anchors.horizontalCenter: parent.horizontalCenter
-                text: root.game.status === Game.STATUS_WON ? "Enter: keep going · R: new game" : "Enter or R: new game"
-                color: Color.muted
-                font.family: Style.font.family
-                font.pixelSize: Style.font.bodySmall
+                Text {
+                  anchors.horizontalCenter: parent.horizontalCenter
+                  visible: root.game.lastRank > 0
+                  text: root.game.lastRank === 1 ? "New record!" : "Rank #" + root.game.lastRank + " in your top 10"
+                  color: root.game.lastRank === 1 ? Color.accent : Color.foreground
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.body
+                }
+
+                Text {
+                  anchors.horizontalCenter: parent.horizontalCenter
+                  text: root.game.status === Game.STATUS_WON ? "Enter: keep going · R: new game" : "Enter or R: new game"
+                  color: Color.muted
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.bodySmall
+                }
               }
             }
           }
