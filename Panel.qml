@@ -294,6 +294,9 @@ Panel {
         width: parent.width
         spacing: 0
 
+        // Top margin so the gain label has room above the SCORE card.
+        Item { width: 1; height: Style.space(24) }
+
         // 1. Header: wordmark, equal stat cards, actions.
         Item {
           width: parent.width
@@ -351,11 +354,13 @@ Panel {
                 }
               }
 
-              // "+N" gain: centred over the SCORE card, floats up and fades.
+              // "+N" gain: centred over the SCORE card, starts just above the
+              // card's top edge (bottom = card top - Style.space(2)) and floats
+              // further up while fading, so it never covers the card content.
               Text {
                 id: gainText
                 anchors.horizontalCenter: parent.horizontalCenter
-                property real baseY: 0
+                property real baseY: -height - Style.space(2)
                 y: baseY
                 z: 10
                 text: "+" + root.gainValue
