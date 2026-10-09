@@ -173,6 +173,14 @@ function move(state, direction, rng) {
         merged: merged
     }
     next = spawn(next, rng)
+    var status = next.status
+    if (!next.keepPlaying && hasValueAtLeast(next.cells, WIN_VALUE)) {
+        status = STATUS_WON
+    }
+    if (!canMove(next.cells)) {
+        status = STATUS_OVER
+    }
+    next.status = status
     return { state: next, moved: true }
 }
 
@@ -275,4 +283,118 @@ function tileLevel(value) {
         level += 1
     }
     return level
+}
+
+function keepGoing(state) {
+    var next = {
+        version: state.version,
+        size: state.size,
+        cells: state.cells.slice(),
+        score: state.score,
+        best: state.best,
+        moves: state.moves,
+        status: state.status,
+        keepPlaying: state.keepPlaying,
+        spawned: state.spawned,
+        merged: state.merged.slice()
+    }
+    if (state.status === STATUS_WON) {
+        next.status = STATUS_PLAYING
+        next.keepPlaying = true
+    }
+    return next
+}
+
+function serializeState(state) {
+    return JSON.stringify({
+        version: state.version,
+        size: state.size,
+        cells: state.cells,
+        score: state.score,
+        best: state.best,
+        moves: state.moves,
+        status: state.status,
+        keepPlaying: state.keepPlaying
+    })
+}
+
+function parseState(text) {
+    if (typeof text !== "string") {
+        return null
+    }
+    if (text.length === 0 || text.length > MAX_STATE_BYTES) {
+        return null
+    }
+    var data
+    try {
+        data = JSON.parse(text)
+    } catch (error) {
+        return null
+    }
+    if (!data || typeof data !== "object") {
+        return null
+    }
+    if (data.version !== VERSION || data.size !== SIZE) {
+        return null
+    }
+    if (!Array.isArray(data.cells) || data.cells.length !== 16) {
+        return null
+    }
+    var i
+    for (i = 0; i < 16; i++) {
+        var cell = data.cells[i]
+        if (cell === 0) {
+            continue
+        }
+        if (typeof cell !== "number" || !isFinite(cell)) {
+            return null
+        }
+        if (Math.floor(cell) !== cell || cell < 2 || cell > 131072) {
+            return null
+        }
+        var reduced = cell
+        while (reduced > 1 && reduced % 2 === 0) {
+            reduced = reduced / 2
+        }
+        if (reduced !== 1) {
+            return null
+        }
+    }
+    var names = ["score", "best", "moves"]
+    var f
+    for (f = 0; f < 3; f++) {
+        var number = data[names[f]]
+        if (typeof number !== "number" || !isFinite(number) || Math.floor(number) !== number) {
+            return null
+        }
+        if (number < 0 || number > 1e9) {
+            return null
+        }
+    }
+    if (
+        data.status !== STATUS_PLAYING &&
+        data.status !== STATUS_WON &&
+        data.status !== STATUS_OVER
+    ) {
+        return null
+    }
+    if (typeof data.keepPlaying !== "boolean") {
+        return null
+    }
+    var best = data.best
+    if (data.score > best) {
+        best = data.score
+    }
+    return {
+        version: VERSION,
+        size: SIZE,
+        cells: data.cells.slice(),
+        score: data.score,
+        best: best,
+        moves: data.moves,
+        status: data.status,
+        keepPlaying: data.keepPlaying,
+        spawned: -1,
+        merged: []
+    }
 }
