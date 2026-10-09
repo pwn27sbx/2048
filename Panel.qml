@@ -45,8 +45,31 @@ Panel {
   // Which view is shown. Not persisted; toggled with `t` / the header button.
   property bool showScores: false
 
+  // Score count-up + best celebration (§3.2).
+  property int scoreFrom: 0
+  property int scoreTo: 0
+  property real scoreT: 1
+  readonly property int displayScore: Game.tweenValue(root.scoreFrom, root.scoreTo, root.scoreT)
+  property real bestCardCelebrate: 0
+  property bool celebratedThisGame: false
+
   // Emitted by the slide timer so cells pop once the slide has finished.
   signal popRequested()
+
+  // Drive the score text: animate between values, or set it instantly.
+  function animateScore(from, to) {
+    root.scoreFrom = from
+    root.scoreTo = to
+    root.scoreT = 0
+    scoreCountUp.restart()
+  }
+
+  function setScoreInstantly(value) {
+    scoreCountUp.stop()
+    root.scoreFrom = value
+    root.scoreTo = value
+    root.scoreT = 1
+  }
 
   function open() {
     root.controller.show()
@@ -73,6 +96,8 @@ Panel {
     // Fast input: finish any in-flight slide instantly, then apply normally.
     // State is always applied immediately; animation is cosmetic only.
     if (root.sliding) root.finishSlide()
+    var prevScore = root.game.score
+    var prevBest = root.game.best
     var result = Game.move(root.game, direction, Math.random, Date.now())
     if (!result.moved) return
     root.ghosts = result.state.transitions
@@ -81,6 +106,12 @@ Panel {
     root.persist()
     slideTimer.restart()
     if (result.state.gain > 0) root.pulseGain(result.state.gain)
+    if (result.state.score !== prevScore) root.animateScore(prevScore, result.state.score)
+    else root.setScoreInstantly(result.state.score)
+    if (Game.isNewBest(prevBest, result.state) && !root.celebratedThisGame) {
+      root.celebratedThisGame = true
+      bestCelebrate.restart()
+    }
   }
 
   function finishSlide() {
@@ -118,11 +149,14 @@ Panel {
     // Records the current game (if any) to the leaderboard, then starts fresh.
     root.game = Game.startNewGame(root.game, Math.random, Date.now())
     root.persist()
+    root.setScoreInstantly(root.game.score)
+    root.celebratedThisGame = false
   }
 
   function keepGoing() {
     root.game = Game.keepGoing(root.game)
     root.persist()
+    root.setScoreInstantly(root.game.score)
   }
 
   // Loaded by the FileView below. Never writes back (that would loop between
@@ -130,6 +164,8 @@ Panel {
   function applyLoaded(text) {
     var parsed = Game.parseState(text)
     root.game = parsed ? parsed : Game.newGame(0, Math.random)
+    root.setScoreInstantly(root.game.score)
+    root.celebratedThisGame = false
   }
 
   // Written only after a user action that changed state.
@@ -181,6 +217,37 @@ Panel {
     }
   }
 
+  // Score count-up (250 ms) and best-card celebration (600 ms, once per game).
+  NumberAnimation {
+    id: scoreCountUp
+    target: root
+    property: "scoreT"
+    from: 0
+    to: 1
+    duration: 250
+    easing.type: Easing.Linear
+  }
+
+  SequentialAnimation {
+    id: bestCelebrate
+    NumberAnimation {
+      target: root
+      property: "bestCardCelebrate"
+      from: 0
+      to: 1
+      duration: 300
+      easing.type: Easing.OutCubic
+    }
+    NumberAnimation {
+      target: root
+      property: "bestCardCelebrate"
+      from: 1
+      to: 0
+      duration: 300
+      easing.type: Easing.InCubic
+    }
+  }
+
   KeyboardPanel {
     id: panel
     anchorItem: root.anchorItem
@@ -225,40 +292,58 @@ Panel {
       Column {
         id: contentColumn
         width: parent.width
-        spacing: Style.space(12)
+        spacing: 0
 
-        // 1. Header: score / best stat cards on the left, actions on the right.
+        // 1. Header: wordmark, equal stat cards, actions.
         Item {
           width: parent.width
-          height: Math.max(headerRow.implicitHeight, newGameButton.implicitHeight)
+          height: Math.max(wordmark.implicitHeight, headerRow.implicitHeight)
+
+          Text {
+            id: wordmark
+            anchors.left: parent.left
+            anchors.verticalCenter: parent.verticalCenter
+            text: "2048"
+            color: Color.accent
+            font.family: Style.font.family
+            font.bold: true
+            font.pixelSize: Style.font.title * 1.4
+          }
 
           Row {
             id: headerRow
-            anchors.left: parent.left
+            anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
             spacing: Style.space(8)
 
             Rectangle {
               id: scoreCard
-              color: Util.alpha(Color.foreground, 0.06)
+              width: Style.space(64)
+              height: scoreColumn.implicitHeight + Style.space(4) * 2
+              color: Util.alpha(Color.foreground, 0.07)
               radius: Style.cornerRadius > 0 ? Style.space(6) : 0
-              implicitWidth: scoreColumn.implicitWidth + Style.space(8) * 2
-              implicitHeight: scoreColumn.implicitHeight + Style.space(4) * 2
 
               Column {
                 id: scoreColumn
-                anchors.centerIn: parent
+                width: parent.width
+                anchors.verticalCenter: parent.verticalCenter
                 spacing: Style.space(2)
 
                 Text {
+                  width: parent.width
+                  horizontalAlignment: Text.AlignHCenter
                   text: "SCORE"
-                  color: Color.muted
+                  color: Color.foreground
+                  opacity: 0.7
                   font.family: Style.font.family
                   font.pixelSize: Style.font.bodySmall
+                  font.letterSpacing: 1
                 }
 
                 Text {
-                  text: root.game.score
+                  width: parent.width
+                  horizontalAlignment: Text.AlignHCenter
+                  text: root.displayScore
                   color: Color.foreground
                   font.family: Style.font.family
                   font.pixelSize: Style.font.title
@@ -266,12 +351,13 @@ Panel {
                 }
               }
 
-              // "+N" score gain: anchored right of the value, floats up and fades.
+              // "+N" gain: centred over the SCORE card, floats up and fades.
               Text {
                 id: gainText
-                property real baseY: scoreColumn.y + (scoreColumn.height - height) / 2
-                x: scoreColumn.x + scoreColumn.width + Style.space(6)
+                anchors.horizontalCenter: parent.horizontalCenter
+                property real baseY: 0
                 y: baseY
+                z: 10
                 text: "+" + root.gainValue
                 color: Color.accent
                 font.family: Style.font.family
@@ -285,7 +371,7 @@ Panel {
                     target: gainText
                     property: "y"
                     from: gainText.baseY
-                    to: gainText.baseY - Style.space(14)
+                    to: gainText.baseY - Style.space(12)
                     duration: root.gainMs
                     easing.type: Easing.OutCubic
                   }
@@ -302,24 +388,32 @@ Panel {
 
             Rectangle {
               id: bestCard
-              color: Util.alpha(Color.foreground, 0.06)
+              width: Style.space(64)
+              height: bestColumn.implicitHeight + Style.space(4) * 2
+              color: Util.alpha(root.bestCardCelebrate > 0 ? Color.accent : Color.foreground,
+                                0.07 + 0.28 * root.bestCardCelebrate)
               radius: Style.cornerRadius > 0 ? Style.space(6) : 0
-              implicitWidth: bestColumn.implicitWidth + Style.space(8) * 2
-              implicitHeight: bestColumn.implicitHeight + Style.space(4) * 2
 
               Column {
                 id: bestColumn
-                anchors.centerIn: parent
+                width: parent.width
+                anchors.verticalCenter: parent.verticalCenter
                 spacing: Style.space(2)
 
                 Text {
+                  width: parent.width
+                  horizontalAlignment: Text.AlignHCenter
                   text: "BEST"
-                  color: Color.muted
+                  color: Color.foreground
+                  opacity: 0.7
                   font.family: Style.font.family
                   font.pixelSize: Style.font.bodySmall
+                  font.letterSpacing: 1
                 }
 
                 Text {
+                  width: parent.width
+                  horizontalAlignment: Text.AlignHCenter
                   text: root.game.best
                   color: Color.accent
                   font.family: Style.font.family
@@ -328,37 +422,34 @@ Panel {
                 }
               }
             }
-          }
 
-          Button {
-            id: scoresButton
-            anchors.right: newGameButton.left
-            anchors.rightMargin: Style.space(6)
-            anchors.verticalCenter: parent.verticalCenter
-            width: Style.space(34)
-            height: Style.space(34)
-            iconText: ""
-            iconSize: Style.font.icon
-            tooltipText: "Top scores"
-            foreground: Color.foreground
-            onClicked: root.showScores = !root.showScores
-          }
+            Button {
+              id: scoresButton
+              width: Style.space(34)
+              height: Style.space(34)
+              iconText: "\uF091"
+              iconSize: Style.font.icon
+              tooltipText: "Top scores"
+              foreground: Color.foreground
+              onClicked: root.showScores = !root.showScores
+            }
 
-          Button {
-            id: newGameButton
-            anchors.right: parent.right
-            anchors.verticalCenter: parent.verticalCenter
-            width: Style.space(34)
-            height: Style.space(34)
-            iconText: "󰑐"
-            iconSize: Style.font.icon
-            tooltipText: "New game"
-            foreground: Color.foreground
-            onClicked: root.newGame()
+            Button {
+              id: newGameButton
+              width: Style.space(34)
+              height: Style.space(34)
+              iconText: "󰑐"
+              iconSize: Style.font.icon
+              tooltipText: "New game"
+              foreground: Color.foreground
+              onClicked: root.newGame()
+            }
           }
         }
 
-        // 2. Board: a square grid of 16 cells.
+        Item { width: 1; height: Style.space(14) }
+
+        // 2. Board: a square grid of 16 cells, single (borderless) surface.
         Item {
           id: boardFrame
           anchors.horizontalCenter: parent.horizontalCenter
@@ -367,11 +458,10 @@ Panel {
 
           readonly property real cellSize: (width - root.boardGap * 5) / 4
 
-          BorderSurface {
+          Rectangle {
             anchors.fill: parent
-            color: Util.alpha(Color.foreground, 0.03)
-            borderSpec: Border.surfaceSpec("popups", "border", Color.popups.border, Math.max(1, Style.normalBorderWidth))
-            radius: Style.cornerRadius
+            color: Util.alpha(Color.foreground, 0.04)
+            radius: Style.cornerRadius > 0 ? Style.space(8) : 0
 
             Grid {
               anchors.fill: parent
@@ -697,6 +787,8 @@ Panel {
             }
           }
         }
+
+        Item { width: 1; height: Style.space(10) }
 
         // 5. Footer hint. One line, inside the panel border.
         Text {
