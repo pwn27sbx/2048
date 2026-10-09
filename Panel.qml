@@ -232,9 +232,15 @@ Panel {
                         : Style.font.title
                     }
 
+                    // Explicit pop: restarted from the handler below when this
+                    // cell is the spawn target or received a merged tile. The
+                    // previous `running:` binding was the bug — a new move that
+                    // flipped the binding off mid-flight froze the tile at 0.85.
+                    // onStopped pins scale back to 1.0 so an interrupted run can
+                    // never leave a tile shrunk.
                     SequentialAnimation {
-                      running: root.game.spawned === cellRoot.index
-                        || root.game.merged.indexOf(cellRoot.index) !== -1
+                      id: popAnim
+                      onStopped: tile.scale = 1.0
 
                       NumberAnimation {
                         target: tile
@@ -244,6 +250,19 @@ Panel {
                         duration: 120
                         easing.type: Easing.OutBack
                       }
+                    }
+                  }
+
+                  // Trigger on the whole game object changing, not on a bool that
+                  // can stay true across moves, so consecutive pops on the same
+                  // cell still restart.
+                  Connections {
+                    target: root
+
+                    function onGameChanged() {
+                      if (root.game.spawned === cellRoot.index
+                          || root.game.merged.indexOf(cellRoot.index) !== -1)
+                        popAnim.restart()
                     }
                   }
                 }
