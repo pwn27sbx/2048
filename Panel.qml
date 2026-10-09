@@ -362,12 +362,19 @@ Panel {
                   readonly property int value: root.game.cells[index]
                   readonly property int level: Game.tileLevel(value)
 
-                  // One cell background: level 0 is the empty tint, any other
-                  // level is that tile's palette fill.
+                  // Empty slot: always visible so the grid never flashes on a
+                  // move. Only the tile Rectangle above it may be hidden.
+                  Rectangle {
+                    anchors.fill: parent
+                    radius: Style.cornerRadius > 0 ? Style.space(6) : 0
+                    color: root.tileColor(0)
+                  }
+
+                  // Tile: the only thing hidden while its tile slides in.
                   Rectangle {
                     id: tile
                     anchors.fill: parent
-                    // Hidden while its tile slides in (the ghost is drawn instead).
+                    visible: cellRoot.value > 0
                     opacity: (root.sliding
                       && (root.isSlideTarget(cellRoot.index) || root.game.spawned === cellRoot.index)) ? 0 : 1
                     radius: Style.cornerRadius > 0 ? Style.space(6) : 0
