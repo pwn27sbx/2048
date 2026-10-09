@@ -7,7 +7,8 @@ const source = fs
   .readFileSync(path.join(__dirname, "..", "Game2048.js"), "utf8")
   .replace(/^\.pragma library\s*$/m, "")
 
-const Game = { Math, Number, JSON, Array, isFinite }
+// `Date` is needed by the pure `formatEntryDate` display helper (Unit 10).
+const Game = { Math, Number, JSON, Array, isFinite, Date }
 vm.createContext(Game)
 vm.runInContext(source, Game, { filename: "Game2048.js" })
 
@@ -722,4 +723,25 @@ test("swipeDirection picks the dominant axis above the threshold", () => {
   // exact tie on |dx| == |dy| -> horizontal wins (documented)
   assert.equal(Game.swipeDirection(30, 30, 20), "right")
   assert.equal(Game.swipeDirection(-30, 30, 20), "left")
+})
+
+// --- 19. scores view date formatting (§5 Unit 10) -------------------------
+
+// All timestamps are built with `new Date(...)` (local time), so the same
+// calendar-day checks hold in any timezone.
+test("formatEntryDate formats today, other days and the empty case", () => {
+  const now = new Date(2026, 9, 9, 20, 0, 0).getTime() // 9 Oct 2026, 20:00 local
+  // zero / invalid -> em dash
+  assert.equal(Game.formatEntryDate(0, now), "—")
+  assert.equal(Game.formatEntryDate(-5, now), "—")
+  assert.equal(Game.formatEntryDate(NaN, now), "—")
+  // same local calendar day -> "today HH:mm" (zero-padded 24h)
+  assert.equal(Game.formatEntryDate(new Date(2026, 9, 9, 14, 35, 0).getTime(), now), "today 14:35")
+  assert.equal(Game.formatEntryDate(new Date(2026, 9, 9, 0, 7, 0).getTime(), now), "today 00:07")
+  // different day -> "dd MMM"
+  assert.equal(Game.formatEntryDate(new Date(2026, 9, 5, 9, 5, 0).getTime(), now), "05 Oct")
+  // same month/day but a different year is not today
+  assert.equal(Game.formatEntryDate(new Date(2025, 9, 9, 14, 35, 0).getTime(), now), "09 Oct")
+  // single-digit month handling
+  assert.equal(Game.formatEntryDate(new Date(2026, 0, 3, 0, 7, 0).getTime(), now), "03 Jan")
 })
