@@ -313,7 +313,11 @@ test("serializeState round-trips through parseState", () => {
     spawned: 5,
     merged: [2, 3]
   })
-  const parsed = Game.parseState(Game.serializeState(state))
+  const text = Game.serializeState(state)
+  const raw = JSON.parse(text)
+  assert.equal(Object.prototype.hasOwnProperty.call(raw, "gain"), false)
+  assert.equal(Object.prototype.hasOwnProperty.call(raw, "transitions"), false)
+  const parsed = Game.parseState(text)
   same(parsed, {
     version: 1,
     size: 4,
@@ -324,7 +328,9 @@ test("serializeState round-trips through parseState", () => {
     status: "playing",
     keepPlaying: false,
     spawned: -1,
-    merged: []
+    merged: [],
+    gain: 0,
+    transitions: []
   })
 })
 
@@ -423,4 +429,120 @@ test("pickTextColor chooses the higher-contrast foreground", () => {
   assert.equal(Game.pickTextColor(black, white, black), "fg")
   // tie -> fg
   assert.equal(Game.pickTextColor(white, white, white), "fg")
+})
+
+// --- 15. slide sources and move transitions (§4.1) ------------------------
+
+test("slideLine reports tile sources", () => {
+  const cases = [
+    [[2, 2, 2, 2], [4, 4, 0, 0], 8, [0, 1], [[0, 1], [2, 3], [], []]],
+    [[2, 2, 2, 0], [4, 2, 0, 0], 4, [0], [[0, 1], [2], [], []]],
+    [[2, 0, 2, 4], [4, 4, 0, 0], 4, [0], [[0, 2], [3], [], []]],
+    [[4, 4, 8, 8], [8, 16, 0, 0], 24, [0, 1], [[0, 1], [2, 3], [], []]],
+    [[2, 4, 8, 16], [2, 4, 8, 16], 0, [], [[0], [1], [2], [3]]],
+    [[0, 0, 0, 2], [2, 0, 0, 0], 0, [], [[3], [], [], []]],
+    [[8, 8, 8, 0], [16, 8, 0, 0], 16, [0], [[0, 1], [2], [], []]]
+  ]
+  for (const [input, line, gain, mergedAt, sources] of cases) {
+    const res = Game.slideLine(input)
+    same(res.line, line, `line for ${JSON.stringify(input)}`)
+    assert.equal(res.gain, gain, `gain for ${JSON.stringify(input)}`)
+    same(res.mergedAt, mergedAt, `mergedAt for ${JSON.stringify(input)}`)
+    same(res.sources, sources, `sources for ${JSON.stringify(input)}`)
+  }
+})
+
+function transitionsByFrom(state) {
+  return state.transitions.slice().sort((a, b) => a.from - b.from)
+}
+
+test("move reports transitions left", () => {
+  const res = Game.move(stateWith(REFERENCE_BOARD), "left", seq(0.5, 0.5))
+  assert.equal(res.moved, true)
+  same(transitionsByFrom(res.state), [
+    { from: 0, to: 0, value: 2 },
+    { from: 2, to: 0, value: 2 },
+    { from: 3, to: 1, value: 4 },
+    { from: 4, to: 4, value: 2 },
+    { from: 5, to: 4, value: 2 },
+    { from: 7, to: 5, value: 4 },
+    { from: 9, to: 8, value: 2 },
+    { from: 10, to: 8, value: 2 },
+    { from: 11, to: 9, value: 8 },
+    { from: 12, to: 12, value: 4 },
+    { from: 14, to: 13, value: 2 },
+    { from: 15, to: 14, value: 8 }
+  ])
+  assert.equal(res.state.transitions.length, REFERENCE_BOARD.filter((v) => v !== 0).length)
+  assert.ok(res.state.transitions.some((t) => t.from === t.to), "a tile that stays put has from === to")
+  assert.equal(res.state.gain, res.state.score)
+})
+
+test("move reports transitions up", () => {
+  const res = Game.move(stateWith(REFERENCE_BOARD), "up", seq(0.5, 0.5))
+  same(transitionsByFrom(res.state), [
+    { from: 0, to: 0, value: 2 },
+    { from: 2, to: 2, value: 2 },
+    { from: 3, to: 3, value: 4 },
+    { from: 4, to: 0, value: 2 },
+    { from: 5, to: 1, value: 2 },
+    { from: 7, to: 3, value: 4 },
+    { from: 9, to: 1, value: 2 },
+    { from: 10, to: 2, value: 2 },
+    { from: 11, to: 7, value: 8 },
+    { from: 12, to: 4, value: 4 },
+    { from: 14, to: 6, value: 2 },
+    { from: 15, to: 7, value: 8 }
+  ])
+  assert.equal(res.state.transitions.length, 12)
+  assert.equal(res.state.gain, 36)
+})
+
+test("move reports transitions down", () => {
+  const res = Game.move(stateWith(REFERENCE_BOARD), "down", seq(0.5, 0.5))
+  same(transitionsByFrom(res.state), [
+    { from: 0, to: 8, value: 2 },
+    { from: 2, to: 10, value: 2 },
+    { from: 3, to: 11, value: 4 },
+    { from: 4, to: 8, value: 2 },
+    { from: 5, to: 13, value: 2 },
+    { from: 7, to: 11, value: 4 },
+    { from: 9, to: 13, value: 2 },
+    { from: 10, to: 14, value: 2 },
+    { from: 11, to: 15, value: 8 },
+    { from: 12, to: 12, value: 4 },
+    { from: 14, to: 14, value: 2 },
+    { from: 15, to: 15, value: 8 }
+  ])
+  assert.equal(res.state.transitions.length, 12)
+  assert.equal(res.state.gain, 36)
+})
+
+test("move reports transitions right", () => {
+  const res = Game.move(stateWith(REFERENCE_BOARD), "right", seq(0.5, 0.5))
+  same(transitionsByFrom(res.state), [
+    { from: 0, to: 2, value: 2 },
+    { from: 2, to: 2, value: 2 },
+    { from: 3, to: 3, value: 4 },
+    { from: 4, to: 6, value: 2 },
+    { from: 5, to: 6, value: 2 },
+    { from: 7, to: 7, value: 4 },
+    { from: 9, to: 10, value: 2 },
+    { from: 10, to: 10, value: 2 },
+    { from: 11, to: 11, value: 8 },
+    { from: 12, to: 13, value: 4 },
+    { from: 14, to: 14, value: 2 },
+    { from: 15, to: 15, value: 8 }
+  ])
+  assert.equal(res.state.transitions.length, 12)
+  assert.equal(res.state.gain, 12)
+})
+
+test("no-op and fresh state carry empty transitions and zero gain", () => {
+  const noop = Game.move(stateWith([2, 4, 8, 16, 4, 8, 16, 32, 8, 16, 32, 64, 16, 32, 64, 128]), "left", seq())
+  assert.equal(noop.moved, false)
+  same(noop.state.transitions, [])
+  assert.equal(noop.state.gain, 0)
+  same(Game.newGame(0, seq(0, 0.5, 0, 0.5)).transitions, [])
+  assert.equal(Game.newGame(0, seq(0, 0.5, 0, 0.5)).gain, 0)
 })
