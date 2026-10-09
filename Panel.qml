@@ -290,9 +290,12 @@ Panel {
           }
         }
 
-        // 4. Footer hint.
+        // 4. Footer hint. Fills the content width so it can never overhang the
+        //    panel border; wraps and centers when the line is wider than the panel.
         Text {
-          anchors.horizontalCenter: parent.horizontalCenter
+          width: parent.width
+          horizontalAlignment: Text.AlignHCenter
+          wrapMode: Text.WordWrap
           text: "Arrows / HJKL / WASD to move · R new game · Esc close"
           color: Color.muted
           font.family: Style.font.family
