@@ -373,3 +373,54 @@ test("parseState forces best to be at least score", () => {
   const parsed = Game.parseState(JSON.stringify(payload))
   assert.equal(parsed.best, 500)
 })
+
+// --- 14. visual palette and text contrast helpers (§3.1) ------------------
+
+test("tileStyle covers the palette table", () => {
+  const table = [
+    [0, "empty", 0.04, false],
+    [1, "fg", 0.12, false],
+    [2, "fg", 0.22, false],
+    [3, "accent", 0.28, false],
+    [4, "accent", 0.42, false],
+    [5, "accent", 0.58, false],
+    [6, "accent", 0.76, false],
+    [7, "accent", 1.0, true],
+    [8, "urgent", 0.45, false],
+    [9, "urgent", 0.65, false],
+    [10, "urgent", 0.85, false],
+    [11, "urgent", 1.0, true]
+  ]
+  for (const [level, base, alpha, solid] of table) {
+    const style = Game.tileStyle(level)
+    assert.equal(style.base, base, `base at level ${level}`)
+    assert.equal(style.alpha, alpha, `alpha at level ${level}`)
+    assert.equal(style.solid, solid, `solid at level ${level}`)
+  }
+  same(Game.tileStyle(15), { base: "urgent", alpha: 1.0, solid: true })
+})
+
+test("relativeLuminance spans 0..1", () => {
+  assert.ok(Math.abs(Game.relativeLuminance(1, 1, 1) - 1) <= 1e-9)
+  assert.ok(Math.abs(Game.relativeLuminance(0, 0, 0) - 0) <= 1e-9)
+})
+
+test("contrastRatio of white and black is 21", () => {
+  assert.ok(Math.abs(Game.contrastRatio(1, 0) - 21) <= 1e-9)
+})
+
+test("blend is straight alpha over an opaque background", () => {
+  same(Game.blend(1, 1, 1, 0, 0.2, 0.4, 0.6), { r: 0.2, g: 0.4, b: 0.6 })
+  same(Game.blend(1, 1, 1, 1, 0.2, 0.4, 0.6), { r: 1, g: 1, b: 1 })
+})
+
+test("pickTextColor chooses the higher-contrast foreground", () => {
+  const white = { r: 1, g: 1, b: 1 }
+  const black = { r: 0, g: 0, b: 0 }
+  // white tile: black text wins
+  assert.equal(Game.pickTextColor(white, white, black), "bg")
+  // black tile: white (fg) text wins
+  assert.equal(Game.pickTextColor(black, white, black), "fg")
+  // tie -> fg
+  assert.equal(Game.pickTextColor(white, white, white), "fg")
+})
