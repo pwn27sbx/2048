@@ -578,10 +578,16 @@ function recordGame(state, now) {
     return copy
 }
 
-// Record the current game (if any) then start a fresh one carrying best + board.
+// Record the current game (if any) then start a fresh one carrying best and
+// leaderboard. The new state also points at the entry just recorded
+// (lastRank/lastRecordedAt) so the scores view can highlight it; the new game
+// itself is not flagged as recorded.
 function startNewGame(state, rng, now) {
     var recorded = recordGame(state, now)
-    return newGame(recorded.best, rng, now, recorded.leaderboard)
+    var next = newGame(recorded.best, rng, now, recorded.leaderboard)
+    next.lastRank = recorded.lastRank
+    next.lastRecordedAt = recorded.lastRecordedAt
+    return next
 }
 
 // --- display helpers (§3.1) -----------------------------------------------
