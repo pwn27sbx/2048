@@ -391,7 +391,7 @@ test("parseState forces best to be at least score", () => {
 
 test("tileStyle covers the palette table", () => {
   const table = [
-    [0, "empty", 0.04, false],
+    [0, "empty", 0.07, false],
     [1, "fg", 0.12, false],
     [2, "fg", 0.22, false],
     [3, "accent", 0.28, false],
@@ -690,4 +690,22 @@ test("newGame, move and startNewGame keep the same rng call counts", () => {
   const res = Game.move(stateWith([2, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]), "left", seq(0.5, 0.5))
   assert.equal(res.moved, true)
   Game.startNewGame(stateWith([2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], { score: 5 }), seq(0, 0.5, 0, 0.5), 1)
+})
+
+// --- 17. score tween and new-best helpers (§3.1) --------------------------
+
+test("tweenValue eases out cubic and clamps", () => {
+  assert.equal(Game.tweenValue(0, 100, 0), 0)
+  assert.equal(Game.tweenValue(0, 100, 1), 100)
+  assert.equal(Game.tweenValue(0, 100, 0.5), Math.round(100 * (1 - Math.pow(0.5, 3))))
+  assert.equal(Game.tweenValue(0, 100, -0.5), 0)
+  assert.equal(Game.tweenValue(0, 100, 1.5), 100)
+  assert.equal(Game.tweenValue(100, 0, 0), 100)
+  assert.equal(Game.tweenValue(100, 0, 1), 0)
+})
+
+test("isNewBest compares against the previous best", () => {
+  assert.equal(Game.isNewBest(100, { best: 120 }), true)
+  assert.equal(Game.isNewBest(120, { best: 120 }), false)
+  assert.equal(Game.isNewBest(120, { best: 100 }), false)
 })
