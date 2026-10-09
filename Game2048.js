@@ -659,3 +659,37 @@ function pickTextColor(tile, fg, bg) {
     var bgContrast = contrastRatio(tileLum, bgLum)
     return bgContrast > fgContrast ? "bg" : "fg"
 }
+
+// --- scores view date formatting (§5 Unit 10) -----------------------------
+
+var MONTH_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+function pad2(value) {
+    return value < 10 ? "0" + value : "" + value
+}
+
+// Same local calendar day (uses the host timezone through Date).
+function sameLocalDay(a, b) {
+    return a.getFullYear() === b.getFullYear()
+        && a.getMonth() === b.getMonth()
+        && a.getDate() === b.getDate()
+}
+
+// Human date for one leaderboard entry: "today HH:mm" for the current local
+// day, "dd MMM" otherwise, and "—" for an unknown (0) timestamp.
+function formatEntryDate(endedAt, now) {
+    var t = Number(endedAt)
+    if (!isFinite(t) || t <= 0) {
+        return "—"
+    }
+    var date = new Date(t)
+    var nowMs = Number(now)
+    if (!isFinite(nowMs)) {
+        nowMs = 0
+    }
+    if (sameLocalDay(date, new Date(nowMs))) {
+        return "today " + pad2(date.getHours()) + ":" + pad2(date.getMinutes())
+    }
+    return pad2(date.getDate()) + " " + MONTH_ABBR[date.getMonth()]
+}
