@@ -1,9 +1,10 @@
 .pragma library
 
-var VERSION = 1
+var VERSION = 2
 var SIZE = 4
 var WIN_VALUE = 2048
 var MAX_STATE_BYTES = 65536
+var LEADERBOARD_SIZE = 10
 var STATUS_PLAYING = "playing"
 var STATUS_WON = "won"
 var STATUS_OVER = "over"
@@ -47,12 +48,49 @@ function emptyState(best) {
         spawned: -1,
         merged: [],
         gain: 0,
-        transitions: []
+        transitions: [],
+        startedAt: 0,
+        recorded: false,
+        lastRank: 0,
+        lastRecordedAt: 0,
+        leaderboard: []
     }
 }
 
-function newGame(best, rng) {
+// Shallow copy of every state field (arrays copied). Used by spawn/keepGoing/move
+// so no field is ever dropped when a new object is built.
+function copyState(state) {
+    return {
+        version: state.version,
+        size: state.size,
+        cells: state.cells.slice(),
+        score: state.score,
+        best: state.best,
+        moves: state.moves,
+        status: state.status,
+        keepPlaying: state.keepPlaying,
+        spawned: state.spawned,
+        merged: (state.merged || []).slice(),
+        gain: state.gain || 0,
+        transitions: (state.transitions || []).slice(),
+        startedAt: state.startedAt || 0,
+        recorded: state.recorded === true,
+        lastRank: state.lastRank || 0,
+        lastRecordedAt: state.lastRecordedAt || 0,
+        leaderboard: (state.leaderboard || []).slice()
+    }
+}
+
+function normalizeMs(value) {
+    var n = Number(value)
+    if (!isFinite(n) || n < 0) return 0
+    return Math.floor(n)
+}
+
+function newGame(best, rng, now, leaderboard) {
     var state = emptyState(best)
+    state.startedAt = normalizeMs(now)
+    state.leaderboard = Array.isArray(leaderboard) ? leaderboard.slice() : []
     state = spawn(state, rng)
     state = spawn(state, rng)
     return state
@@ -94,7 +132,8 @@ function slideLine(line) {
     return { line: out, gain: gain, mergedAt: mergedAt, sources: sources }
 }
 
-function move(state, direction, rng) {
+function move(state, direction, rng, now) {
+    if (now === undefined) now = 0
     var dirs = ["left", "right", "up", "down"]
     var valid = false
     var k
@@ -104,20 +143,9 @@ function move(state, direction, rng) {
         }
     }
 
-    var copy = {
-        version: state.version,
-        size: state.size,
-        cells: state.cells.slice(),
-        score: state.score,
-        best: state.best,
-        moves: state.moves,
-        status: state.status,
-        keepPlaying: state.keepPlaying,
-        spawned: state.spawned,
-        merged: state.merged.slice(),
-        gain: 0,
-        transitions: []
-    }
+    var copy = copyState(state)
+    copy.gain = 0
+    copy.transitions = []
 
     if (!valid || state.status !== STATUS_PLAYING) {
         return { state: copy, moved: false }
@@ -212,20 +240,15 @@ function move(state, direction, rng) {
         best = score
     }
 
-    var next = {
-        version: state.version,
-        size: state.size,
-        cells: cells,
-        score: score,
-        best: best,
-        moves: state.moves + 1,
-        status: state.status,
-        keepPlaying: state.keepPlaying,
-        spawned: -1,
-        merged: merged,
-        gain: gain,
-        transitions: transitions
-    }
+    var next = copyState(state)
+    next.cells = cells
+    next.score = score
+    next.best = best
+    next.moves = state.moves + 1
+    next.spawned = -1
+    next.merged = merged
+    next.gain = gain
+    next.transitions = transitions
     next = spawn(next, rng)
     var status = next.status
     if (!next.keepPlaying && hasValueAtLeast(next.cells, WIN_VALUE)) {
@@ -235,6 +258,10 @@ function move(state, direction, rng) {
         status = STATUS_OVER
     }
     next.status = status
+    // A finished game is written to the leaderboard once, here.
+    if (status === STATUS_OVER) {
+        next = recordGame(next, now)
+    }
     return { state: next, moved: true }
 }
 
@@ -248,37 +275,17 @@ function spawn(state, rng) {
         }
     }
     if (empties.length === 0) {
-        return {
-            version: state.version,
-            size: state.size,
-            cells: cells,
-            score: state.score,
-            best: state.best,
-            moves: state.moves,
-            status: state.status,
-            keepPlaying: state.keepPlaying,
-            spawned: -1,
-            merged: state.merged.slice(),
-            gain: state.gain || 0,
-            transitions: (state.transitions || []).slice()
-        }
+        var full = copyState(state)
+        full.cells = cells
+        full.spawned = -1
+        return full
     }
     var pick = empties[Math.min(empties.length - 1, Math.floor(rng() * empties.length))]
     cells[pick] = rng() < 0.1 ? 4 : 2
-    return {
-        version: state.version,
-        size: state.size,
-        cells: cells,
-        score: state.score,
-        best: state.best,
-        moves: state.moves,
-        status: state.status,
-        keepPlaying: state.keepPlaying,
-        spawned: pick,
-        merged: state.merged.slice(),
-        gain: state.gain || 0,
-        transitions: (state.transitions || []).slice()
-    }
+    var next = copyState(state)
+    next.cells = cells
+    next.spawned = pick
+    return next
 }
 
 function canMove(cells) {
@@ -344,20 +351,7 @@ function tileLevel(value) {
 }
 
 function keepGoing(state) {
-    var next = {
-        version: state.version,
-        size: state.size,
-        cells: state.cells.slice(),
-        score: state.score,
-        best: state.best,
-        moves: state.moves,
-        status: state.status,
-        keepPlaying: state.keepPlaying,
-        spawned: state.spawned,
-        merged: state.merged.slice(),
-        gain: state.gain || 0,
-        transitions: (state.transitions || []).slice()
-    }
+    var next = copyState(state)
     if (state.status === STATUS_WON) {
         next.status = STATUS_PLAYING
         next.keepPlaying = true
@@ -367,14 +361,19 @@ function keepGoing(state) {
 
 function serializeState(state) {
     return JSON.stringify({
-        version: state.version,
+        version: VERSION,
         size: state.size,
         cells: state.cells,
         score: state.score,
         best: state.best,
         moves: state.moves,
         status: state.status,
-        keepPlaying: state.keepPlaying
+        keepPlaying: state.keepPlaying,
+        startedAt: normalizeMs(state.startedAt),
+        recorded: state.recorded === true,
+        lastRank: state.lastRank || 0,
+        lastRecordedAt: normalizeMs(state.lastRecordedAt),
+        leaderboard: state.leaderboard || []
     })
 }
 
@@ -394,7 +393,10 @@ function parseState(text) {
     if (!data || typeof data !== "object") {
         return null
     }
-    if (data.version !== VERSION || data.size !== SIZE) {
+    if (data.version !== 1 && data.version !== 2) {
+        return null
+    }
+    if (data.size !== SIZE) {
         return null
     }
     if (!Array.isArray(data.cells) || data.cells.length !== 16) {
@@ -445,6 +447,23 @@ function parseState(text) {
     if (data.score > best) {
         best = data.score
     }
+    // Leaderboard: keep only individually valid entries, sorted and truncated.
+    var leaderboard = []
+    if (Array.isArray(data.leaderboard)) {
+        for (var li = 0; li < data.leaderboard.length; li++) {
+            var clean = sanitizeEntry(data.leaderboard[li])
+            if (clean) {
+                leaderboard.push(clean)
+            }
+        }
+        leaderboard.sort(compareEntries)
+        if (leaderboard.length > LEADERBOARD_SIZE) {
+            leaderboard = leaderboard.slice(0, LEADERBOARD_SIZE)
+        }
+    }
+    if (leaderboard.length > 0 && leaderboard[0].score > best) {
+        best = leaderboard[0].score
+    }
     return {
         version: VERSION,
         size: SIZE,
@@ -457,8 +476,112 @@ function parseState(text) {
         spawned: -1,
         merged: [],
         gain: 0,
-        transitions: []
+        transitions: [],
+        // Version 1 has none of these: migrate to the v2 defaults.
+        startedAt: data.version === 2 ? normalizeMs(data.startedAt) : 0,
+        recorded: data.version === 2 && data.recorded === true,
+        lastRank: data.version === 2 && isRank(data.lastRank) ? data.lastRank : 0,
+        lastRecordedAt: data.version === 2 ? normalizeMs(data.lastRecordedAt) : 0,
+        leaderboard: leaderboard
     }
+}
+
+// --- local leaderboard (§5.2) ---------------------------------------------
+
+function isIntIn(value, lo, hi) {
+    return typeof value === "number" && isFinite(value) && Math.floor(value) === value && value >= lo && value <= hi
+}
+
+function isPowerOfTwoOrZero(value) {
+    if (value === 0) return true
+    if (typeof value !== "number" || !isFinite(value) || Math.floor(value) !== value) return false
+    if (value < 2 || value > 131072) return false
+    var r = value
+    while (r > 1 && r % 2 === 0) r = r / 2
+    return r === 1
+}
+
+function isRank(value) {
+    return isIntIn(value, 0, LEADERBOARD_SIZE)
+}
+
+// Validate one stored leaderboard entry; return a clean copy or null.
+function sanitizeEntry(entry) {
+    if (!entry || typeof entry !== "object") return null
+    if (!isIntIn(entry.score, 0, 1e9)) return null
+    if (!isPowerOfTwoOrZero(entry.maxTile)) return null
+    if (!isIntIn(entry.moves, 0, 1e9)) return null
+    if (!isIntIn(entry.endedAt, 0, 1e13)) return null
+    if (typeof entry.won !== "boolean") return null
+    return {
+        score: entry.score,
+        maxTile: entry.maxTile,
+        moves: entry.moves,
+        endedAt: entry.endedAt,
+        won: entry.won
+    }
+}
+
+function maxTile(cells) {
+    var best = 0
+    for (var i = 0; i < cells.length; i++) {
+        if (cells[i] > best) best = cells[i]
+    }
+    return best
+}
+
+// score desc, then maxTile desc, then endedAt asc (older first on a tie).
+function compareEntries(a, b) {
+    if (a.score !== b.score) return b.score - a.score
+    if (a.maxTile !== b.maxTile) return b.maxTile - a.maxTile
+    return a.endedAt - b.endedAt
+}
+
+// Insert one entry, sort, truncate to LEADERBOARD_SIZE; rank 1..10 or 0.
+function insertEntry(leaderboard, entry) {
+    var list = []
+    for (var i = 0; i < leaderboard.length; i++) list.push(leaderboard[i])
+    list.push(entry)
+    list.sort(compareEntries)
+    var rank = 0
+    for (i = 0; i < list.length; i++) {
+        if (list[i] === entry) { rank = i + 1; break }
+    }
+    if (list.length > LEADERBOARD_SIZE) list = list.slice(0, LEADERBOARD_SIZE)
+    if (rank > LEADERBOARD_SIZE) rank = 0
+    return { leaderboard: list, rank: rank }
+}
+
+// Record the current game once. No-op copy when already recorded or score 0.
+function recordGame(state, now) {
+    var copy = copyState(state)
+    if (state.recorded === true || state.score === 0) {
+        return copy
+    }
+    var top = maxTile(state.cells)
+    var entry = {
+        score: state.score,
+        maxTile: top,
+        moves: state.moves,
+        endedAt: normalizeMs(now),
+        won: top >= WIN_VALUE
+    }
+    var result = insertEntry(state.leaderboard || [], entry)
+    copy.recorded = true
+    copy.lastRank = result.rank
+    copy.lastRecordedAt = normalizeMs(now)
+    copy.leaderboard = result.leaderboard
+    var best = state.best
+    if (entry.score > best) best = entry.score
+    if (result.leaderboard.length > 0 && result.leaderboard[0].score > best) best = result.leaderboard[0].score
+    copy.best = best
+    return copy
+}
+
+// Record the current game (if any) then start a fresh one carrying best + board.
+function startNewGame(state, rng, now) {
+    var recorded = recordGame(state, now)
+    return newGame(recorded.best, rng, now, recorded.leaderboard)
 }
 
 // Clamp any level into the palette's 0..11 range.
