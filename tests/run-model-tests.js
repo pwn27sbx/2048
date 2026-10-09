@@ -709,3 +709,17 @@ test("isNewBest compares against the previous best", () => {
   assert.equal(Game.isNewBest(120, { best: 120 }), false)
   assert.equal(Game.isNewBest(120, { best: 100 }), false)
 })
+
+// --- 18. swipe direction (§4.1) -------------------------------------------
+
+test("swipeDirection picks the dominant axis above the threshold", () => {
+  assert.equal(Game.swipeDirection(0, 0, 20), "")
+  assert.equal(Game.swipeDirection(5, 5, 20), "")
+  assert.equal(Game.swipeDirection(40, 5, 20), "right")
+  assert.equal(Game.swipeDirection(-40, 5, 20), "left")
+  assert.equal(Game.swipeDirection(3, -50, 20), "up")
+  assert.equal(Game.swipeDirection(3, 50, 20), "down")
+  // exact tie on |dx| == |dy| -> horizontal wins (documented)
+  assert.equal(Game.swipeDirection(30, 30, 20), "right")
+  assert.equal(Game.swipeDirection(-30, 30, 20), "left")
+})
