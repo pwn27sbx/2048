@@ -45,7 +45,9 @@ function emptyState(best) {
         status: STATUS_PLAYING,
         keepPlaying: false,
         spawned: -1,
-        merged: []
+        merged: [],
+        gain: 0,
+        transitions: []
     }
 }
 
@@ -58,15 +60,18 @@ function newGame(best, rng) {
 
 function slideLine(line) {
     var kept = []
+    var positions = []
     var i
     for (i = 0; i < 4; i++) {
         if (line[i] !== 0) {
             kept.push(line[i])
+            positions.push(i)
         }
     }
     var out = []
     var gain = 0
     var mergedAt = []
+    var sources = []
     i = 0
     while (i < kept.length) {
         if (i + 1 < kept.length && kept[i] === kept[i + 1]) {
@@ -74,16 +79,19 @@ function slideLine(line) {
             mergedAt.push(out.length)
             out.push(merged)
             gain += merged
+            sources.push([positions[i], positions[i + 1]])
             i += 2
         } else {
             out.push(kept[i])
+            sources.push([positions[i]])
             i += 1
         }
     }
     while (out.length < 4) {
         out.push(0)
+        sources.push([])
     }
-    return { line: out, gain: gain, mergedAt: mergedAt }
+    return { line: out, gain: gain, mergedAt: mergedAt, sources: sources }
 }
 
 function move(state, direction, rng) {
@@ -106,7 +114,9 @@ function move(state, direction, rng) {
         status: state.status,
         keepPlaying: state.keepPlaying,
         spawned: state.spawned,
-        merged: state.merged.slice()
+        merged: state.merged.slice(),
+        gain: 0,
+        transitions: []
     }
 
     if (!valid || state.status !== STATUS_PLAYING) {
@@ -116,6 +126,7 @@ function move(state, direction, rng) {
     var cells = state.cells.slice()
     var gain = 0
     var merged = []
+    var transitions = []
     var moved = false
     var line
     var result
@@ -166,6 +177,29 @@ function move(state, direction, rng) {
                 merged.push((3 - pos) * 4 + i)
             }
         }
+        // One transition per pre-move tile: where it came from, where it ended,
+        // and its value before the move (same direction mapping as `merged`).
+        for (j = 0; j < 4; j++) {
+            for (k = 0; k < result.sources[j].length; k++) {
+                var srcPos = result.sources[j][k]
+                var fromIndex
+                var toIndex
+                if (direction === "left") {
+                    fromIndex = i * 4 + srcPos
+                    toIndex = i * 4 + j
+                } else if (direction === "right") {
+                    fromIndex = i * 4 + (3 - srcPos)
+                    toIndex = i * 4 + (3 - j)
+                } else if (direction === "up") {
+                    fromIndex = srcPos * 4 + i
+                    toIndex = j * 4 + i
+                } else {
+                    fromIndex = (3 - srcPos) * 4 + i
+                    toIndex = (3 - j) * 4 + i
+                }
+                transitions.push({ from: fromIndex, to: toIndex, value: state.cells[fromIndex] })
+            }
+        }
     }
 
     if (!moved) {
@@ -188,7 +222,9 @@ function move(state, direction, rng) {
         status: state.status,
         keepPlaying: state.keepPlaying,
         spawned: -1,
-        merged: merged
+        merged: merged,
+        gain: gain,
+        transitions: transitions
     }
     next = spawn(next, rng)
     var status = next.status
@@ -222,7 +258,9 @@ function spawn(state, rng) {
             status: state.status,
             keepPlaying: state.keepPlaying,
             spawned: -1,
-            merged: state.merged.slice()
+            merged: state.merged.slice(),
+            gain: state.gain || 0,
+            transitions: (state.transitions || []).slice()
         }
     }
     var pick = empties[Math.min(empties.length - 1, Math.floor(rng() * empties.length))]
@@ -237,7 +275,9 @@ function spawn(state, rng) {
         status: state.status,
         keepPlaying: state.keepPlaying,
         spawned: pick,
-        merged: state.merged.slice()
+        merged: state.merged.slice(),
+        gain: state.gain || 0,
+        transitions: (state.transitions || []).slice()
     }
 }
 
@@ -314,7 +354,9 @@ function keepGoing(state) {
         status: state.status,
         keepPlaying: state.keepPlaying,
         spawned: state.spawned,
-        merged: state.merged.slice()
+        merged: state.merged.slice(),
+        gain: state.gain || 0,
+        transitions: (state.transitions || []).slice()
     }
     if (state.status === STATUS_WON) {
         next.status = STATUS_PLAYING
@@ -413,7 +455,9 @@ function parseState(text) {
         status: data.status,
         keepPlaying: data.keepPlaying,
         spawned: -1,
-        merged: []
+        merged: [],
+        gain: 0,
+        transitions: []
     }
 }
 
