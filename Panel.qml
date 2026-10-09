@@ -825,12 +825,14 @@ Panel {
             clip: true
 
             readonly property int margin: Style.space(12)
-            readonly property int colGap: Style.space(8)
+            readonly property int rowPad: Style.space(6)   // row background padding
+            readonly property int colGap: Style.space(8)   // rank <-> Score
+            readonly property int numGap: Style.space(16)  // between numeric columns
             readonly property int rankW: Style.space(16)
             readonly property int scoreW: Style.space(56)
-            readonly property int tileW: Style.space(56)
+            readonly property int tileW: Style.space(60)
             readonly property int rowH: Style.space(22)
-            readonly property int dateW: width - margin * 2 - rankW - scoreW - tileW - colGap * 3
+            readonly property int dateW: width - margin * 2 - rowPad * 2 - rankW - scoreW - tileW - colGap - numGap * 2
             readonly property color rowDim: Util.alpha(Color.foreground, 0.03)
             readonly property color latestDim: Util.alpha(Color.accent, 0.18)
             readonly property color headerInk: Util.alpha(Color.foreground, 0.6)
@@ -851,42 +853,59 @@ Panel {
 
               Item { width: 1; height: Style.space(4) }
 
-              // Column headers: monospaced columns, right-aligned numbers.
+              // Column headers: fixed-width columns with explicit gaps so the
+              // labels never touch; right-aligned over their values and
+              // vertically centred on the header row.
               Row {
                 id: scoresHeader
-                width: parent.width
-                spacing: scoresView.colGap
+                x: scoresView.rowPad
+                width: parent.width - scoresView.rowPad * 2
+                spacing: 0
 
                 Text {
                   width: scoresView.rankW
+                  height: scoresView.rowH
                   horizontalAlignment: Text.AlignHCenter
+                  verticalAlignment: Text.AlignVCenter
                   text: "#"
                   color: scoresView.headerInk
                   font.family: Style.font.family
                   font.pixelSize: Style.font.bodySmall
                 }
 
+                Item { width: scoresView.colGap; height: 1 }
+
                 Text {
                   width: scoresView.scoreW
+                  height: scoresView.rowH
                   horizontalAlignment: Text.AlignRight
+                  verticalAlignment: Text.AlignVCenter
                   text: "Score"
                   color: scoresView.headerInk
                   font.family: Style.font.family
                   font.pixelSize: Style.font.bodySmall
                 }
 
+                Item { width: scoresView.numGap; height: 1 }
+
                 Text {
                   width: scoresView.tileW
+                  height: scoresView.rowH
                   horizontalAlignment: Text.AlignRight
+                  verticalAlignment: Text.AlignVCenter
                   text: "Best tile"
                   color: scoresView.headerInk
                   font.family: Style.font.family
                   font.pixelSize: Style.font.bodySmall
                 }
 
+                Item { width: scoresView.numGap; height: 1 }
+
                 Text {
                   width: scoresView.dateW
+                  height: scoresView.rowH
                   horizontalAlignment: Text.AlignRight
+                  verticalAlignment: Text.AlignVCenter
                   text: "Date"
                   color: scoresView.headerInk
                   font.family: Style.font.family
@@ -931,7 +950,9 @@ Panel {
 
                   Row {
                     anchors.fill: parent
-                    spacing: scoresView.colGap
+                    anchors.leftMargin: scoresView.rowPad
+                    anchors.rightMargin: scoresView.rowPad
+                    spacing: 0
 
                     // Rank: a filled circle for the podium (1-3), plain text after.
                     Item {
@@ -968,27 +989,39 @@ Panel {
                       }
                     }
 
+                    Item { width: scoresView.colGap; height: 1 }
+
                     Text {
                       width: scoresView.scoreW
+                      height: parent.height
                       horizontalAlignment: Text.AlignRight
+                      verticalAlignment: Text.AlignVCenter
                       text: scoreRowItem.modelData.score
                       color: scoreRowItem.rowColor
                       font.family: Style.font.family
                       font.pixelSize: Style.font.bodySmall
                     }
 
+                    Item { width: scoresView.numGap; height: 1 }
+
                     Text {
                       width: scoresView.tileW
+                      height: parent.height
                       horizontalAlignment: Text.AlignRight
+                      verticalAlignment: Text.AlignVCenter
                       text: scoreRowItem.modelData.maxTile
                       color: scoreRowItem.rowColor
                       font.family: Style.font.family
                       font.pixelSize: Style.font.bodySmall
                     }
 
+                    Item { width: scoresView.numGap; height: 1 }
+
                     Text {
                       width: scoresView.dateW
+                      height: parent.height
                       horizontalAlignment: Text.AlignRight
+                      verticalAlignment: Text.AlignVCenter
                       text: Game.formatEntryDate(scoreRowItem.modelData.endedAt, Date.now())
                       color: scoreRowItem.rowColor
                       font.family: Style.font.family
