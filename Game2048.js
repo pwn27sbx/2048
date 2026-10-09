@@ -601,6 +601,16 @@ function isNewBest(prevBest, state) {
     return state.best > prevBest
 }
 
+// Direction of a drag: "" below the threshold, else the dominant axis.
+// On an exact |dx| == |dy| tie, the horizontal axis wins.
+function swipeDirection(dx, dy, threshold) {
+    var adx = Math.abs(dx)
+    var ady = Math.abs(dy)
+    if (Math.max(adx, ady) < threshold) return ""
+    if (adx >= ady) return dx < 0 ? "left" : "right"
+    return dy < 0 ? "up" : "down"
+}
+
 // Clamp any level into the palette's 0..11 range.
 function clampLevel(level) {
     var n = Math.floor(Number(level))
