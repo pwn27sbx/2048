@@ -5,10 +5,9 @@ import qs.Commons
 import qs.Ui
 import "Game2048.js" as Game
 
-// 2048 game popup. Keyboard-driven panel under the bar.
-//
-// No persistence yet (Unit 2): the game starts from Game.newGame(0, Math.random)
-// and persist() is a stub; Unit 3 wires the FileView.
+// 2048 game popup. Keyboard-driven panel under the bar. All rules and stored
+// data live in Game2048.js; this file renders state and forwards input. The
+// board persists under XDG state through the FileView below.
 Panel {
   id: root
   moduleName: "pwnsxb.2048"
@@ -82,6 +81,24 @@ Panel {
     stateFile.setText(Game.serializeState(root.game))
   }
 
+  // Map a tile level to its themed fill color (§3.2). No hex literals.
+  function tileColor(level) {
+    var style = Game.tileStyle(level)
+    var base = style.base === "accent" ? Color.accent
+      : style.base === "urgent" ? Color.urgent
+      : Color.foreground
+    return Util.alpha(base, style.alpha)
+  }
+
+  // Readable text color on a tile: composite the tile fill over the popup
+  // background, then let the WCAG contrast pick foreground or background.
+  function tileTextColor(level) {
+    var fill = tileColor(level)
+    var bg = Color.popups.background
+    var over = Game.blend(fill.r, fill.g, fill.b, fill.a, bg.r, bg.g, bg.b)
+    return Game.pickTextColor(over, Color.foreground, bg) === "bg" ? bg : Color.foreground
+  }
+
   FileView {
     id: stateFile
     path: root.statePath
@@ -130,52 +147,72 @@ Panel {
         width: parent.width
         spacing: Style.space(12)
 
-        // 1. Header: score / best on the left, new game on the right.
+        // 1. Header: score / best stat cards on the left, actions on the right.
         Item {
           width: parent.width
-          height: Math.max(scoreRow.implicitHeight, newGameButton.implicitHeight)
+          height: Math.max(headerRow.implicitHeight, newGameButton.implicitHeight)
 
           Row {
-            id: scoreRow
+            id: headerRow
             anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
-            spacing: Style.space(22)
+            spacing: Style.space(8)
 
-            Column {
-              spacing: Style.space(2)
+            Rectangle {
+              id: scoreCard
+              color: Util.alpha(Color.foreground, 0.06)
+              radius: Style.cornerRadius > 0 ? Style.space(6) : 0
+              implicitWidth: scoreColumn.implicitWidth + Style.space(8) * 2
+              implicitHeight: scoreColumn.implicitHeight + Style.space(4) * 2
 
-              Text {
-                text: "SCORE"
-                color: Color.muted
-                font.family: Style.font.family
-                font.pixelSize: Style.font.bodySmall
-              }
+              Column {
+                id: scoreColumn
+                anchors.centerIn: parent
+                spacing: Style.space(2)
 
-              Text {
-                text: root.game.score
-                color: Color.foreground
-                font.family: Style.font.family
-                font.pixelSize: Style.font.title
-                font.bold: true
+                Text {
+                  text: "SCORE"
+                  color: Color.muted
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.bodySmall
+                }
+
+                Text {
+                  text: root.game.score
+                  color: Color.foreground
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.title
+                  font.bold: true
+                }
               }
             }
 
-            Column {
-              spacing: Style.space(2)
+            Rectangle {
+              id: bestCard
+              color: Util.alpha(Color.foreground, 0.06)
+              radius: Style.cornerRadius > 0 ? Style.space(6) : 0
+              implicitWidth: bestColumn.implicitWidth + Style.space(8) * 2
+              implicitHeight: bestColumn.implicitHeight + Style.space(4) * 2
 
-              Text {
-                text: "BEST"
-                color: Color.muted
-                font.family: Style.font.family
-                font.pixelSize: Style.font.bodySmall
-              }
+              Column {
+                id: bestColumn
+                anchors.centerIn: parent
+                spacing: Style.space(2)
 
-              Text {
-                text: root.game.best
-                color: Color.accent
-                font.family: Style.font.family
-                font.pixelSize: Style.font.title
-                font.bold: true
+                Text {
+                  text: "BEST"
+                  color: Color.muted
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.bodySmall
+                }
+
+                Text {
+                  text: root.game.best
+                  color: Color.accent
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.title
+                  font.bold: true
+                }
               }
             }
           }
@@ -201,7 +238,7 @@ Panel {
           width: Math.min(parent.width, Style.space(300))
           height: width
 
-          readonly property real cellSize: (width - root.boardGap * 3) / 4
+          readonly property real cellSize: (width - root.boardGap * 5) / 4
 
           BorderSurface {
             anchors.fill: parent
@@ -211,6 +248,7 @@ Panel {
 
             Grid {
               anchors.fill: parent
+              anchors.margins: root.boardGap
               columns: 4
               spacing: root.boardGap
 
@@ -226,36 +264,28 @@ Panel {
                   readonly property int value: root.game.cells[index]
                   readonly property int level: Game.tileLevel(value)
 
-                  // Empty slot.
-                  Rectangle {
-                    anchors.fill: parent
-                    radius: Style.cornerRadius > 0 ? Style.space(6) : 0
-                    color: Util.alpha(Color.foreground, 0.06)
-                  }
-
-                  // Tile (only meaningful when value > 0).
+                  // One cell background: level 0 is the empty tint, any other
+                  // level is that tile's palette fill.
                   Rectangle {
                     id: tile
                     anchors.fill: parent
-                    visible: cellRoot.value > 0
                     radius: Style.cornerRadius > 0 ? Style.space(6) : 0
-                    color: {
-                      var L = cellRoot.level
-                      if (L <= 2) return Util.alpha(Color.foreground, 0.14 + 0.06 * (L - 1))
-                      if (L <= 6) return Util.alpha(Color.accent, 0.30 + 0.12 * (L - 3))
-                      if (L <= 10) return Color.accent
-                      return Color.urgent
-                    }
+                    color: root.tileColor(cellRoot.level)
 
                     Text {
                       anchors.centerIn: parent
+                      visible: cellRoot.value > 0
                       text: cellRoot.value
-                      color: cellRoot.level >= 7 ? Color.background : Color.foreground
+                      color: root.tileTextColor(cellRoot.level)
                       font.family: Style.font.family
                       font.bold: true
-                      font.pixelSize: cellRoot.level <= 6 ? Style.font.title * 1.5
-                        : cellRoot.level <= 9 ? Style.font.title * 1.25
-                        : Style.font.title
+                      font.pixelSize: {
+                        var digits = String(cellRoot.value).length
+                        if (digits <= 2) return Style.font.title * 1.6
+                        if (digits === 3) return Style.font.title * 1.3
+                        if (digits === 4) return Style.font.title * 1.05
+                        return Style.font.title * 0.85
+                      }
                     }
 
                     // Explicit pop: restarted from the handler below when this
@@ -296,12 +326,12 @@ Panel {
             }
           }
 
-          // 3. Overlay for won / over. No debug hook to reach these: Unit 3
-          //    drives them by editing the state file.
+          // 3. Overlay for won / over: translucent so the final board stays
+          //    visible. Reached by editing the state file, not debug code.
           Rectangle {
             anchors.fill: parent
             visible: root.game.status === Game.STATUS_WON || root.game.status === Game.STATUS_OVER
-            color: Color.popups.background
+            color: Util.alpha(Color.popups.background, 0.88)
             radius: Style.cornerRadius
             border.width: Math.max(1, Style.normalBorderWidth)
             border.color: Color.popups.border
@@ -317,6 +347,14 @@ Panel {
                 font.family: Style.font.family
                 font.bold: true
                 font.pixelSize: Style.font.title
+              }
+
+              Text {
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: "Score " + root.game.score + " · Best tile " + Math.max.apply(null, root.game.cells)
+                color: Color.foreground
+                font.family: Style.font.family
+                font.pixelSize: Style.font.body
               }
 
               Text {

@@ -25,6 +25,9 @@ BarWidget {
   // KeyboardPanel reads popoutSwitchClosing back off its owner.
   readonly property bool popoutSwitchClosing: panelLoader.item ? panelLoader.item.popoutSwitchClosing === true : false
 
+  // Best score read from the loaded panel, used by the tooltip.
+  readonly property int bestScore: panelLoader.item && panelLoader.item.game ? panelLoader.item.game.best : 0
+
   function open() {
     if (panelLoader.item) panelLoader.item.open()
   }
@@ -137,7 +140,7 @@ BarWidget {
     bar: root.bar
     active: root.opened
     iconComponent: tileGlyph
-    tooltipText: "2048"
+    tooltipText: root.bestScore > 0 ? "2048 · Best " + root.bestScore : "2048"
     onPressed: root.togglePanel()
   }
 }
