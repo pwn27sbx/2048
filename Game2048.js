@@ -13,7 +13,7 @@ var STATUS_OVER = "over"
 // empty cell and levels >= 11 (2048+) reuse the last row. `solid` marks a fully
 // opaque fill; QML maps `base` to a theme color and `alpha` to its opacity.
 var PALETTE = [
-    { base: "empty", alpha: 0.04, solid: false }, // 0 empty
+    { base: "empty", alpha: 0.07, solid: false }, // 0 empty
     { base: "fg", alpha: 0.12, solid: false },    // 1 2
     { base: "fg", alpha: 0.22, solid: false },    // 2 4
     { base: "accent", alpha: 0.28, solid: false },// 3 8
@@ -582,6 +582,23 @@ function recordGame(state, now) {
 function startNewGame(state, rng, now) {
     var recorded = recordGame(state, now)
     return newGame(recorded.best, rng, now, recorded.leaderboard)
+}
+
+// --- display helpers (§3.1) -----------------------------------------------
+
+// Integer interpolation with ease-out cubic. t is clamped to [0, 1].
+function tweenValue(from, to, t) {
+    var clamped = Number(t)
+    if (!isFinite(clamped)) clamped = 0
+    if (clamped < 0) clamped = 0
+    if (clamped > 1) clamped = 1
+    var eased = 1 - Math.pow(1 - clamped, 3)
+    return Math.round(from + (to - from) * eased)
+}
+
+// True when this state's best beats the previous best.
+function isNewBest(prevBest, state) {
+    return state.best > prevBest
 }
 
 // Clamp any level into the palette's 0..11 range.
