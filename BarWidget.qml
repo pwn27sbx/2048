@@ -18,7 +18,7 @@ BarWidget {
   // The open-panel indicator follows the painted icon button rather than the
   // whole slot the widget occupies.
   readonly property real openPanelIndicatorWidth: button.implicitWidth
-  readonly property real openPanelIndicatorHeight: button.implicitHeight
+  readonly property real openPanelIndicatorHeight: Math.max(Style.space(10), Math.round(Style.bar.iconSlot * 0.55))
 
   // Forwarded so this widget can stand in for the panel as the bar's popout
   // identity: Bar.requestPopout prefers closeForPopoutSwitch over close, and
