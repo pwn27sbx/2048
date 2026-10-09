@@ -317,9 +317,10 @@ test("serializeState round-trips through parseState", () => {
   const raw = JSON.parse(text)
   assert.equal(Object.prototype.hasOwnProperty.call(raw, "gain"), false)
   assert.equal(Object.prototype.hasOwnProperty.call(raw, "transitions"), false)
+  assert.equal(raw.version, 2)
   const parsed = Game.parseState(text)
   same(parsed, {
-    version: 1,
+    version: 2,
     size: 4,
     cells: state.cells,
     score: 12,
@@ -330,7 +331,12 @@ test("serializeState round-trips through parseState", () => {
     spawned: -1,
     merged: [],
     gain: 0,
-    transitions: []
+    transitions: [],
+    startedAt: 0,
+    recorded: false,
+    lastRank: 0,
+    lastRecordedAt: 0,
+    leaderboard: []
   })
 })
 
@@ -352,7 +358,8 @@ test("parseState rejects every invalid payload with null", () => {
   assert.equal(Game.parseState(""), null)
   assert.equal(Game.parseState("not json"), null)
   assert.equal(Game.parseState("x".repeat(65537)), null)
-  assert.equal(Game.parseState(raw({ version: 2 })), null)
+  assert.equal(Game.parseState(raw({ version: 0 })), null)
+  assert.equal(Game.parseState(raw({ version: 3 })), null)
   assert.equal(
     Game.parseState(JSON.stringify(Object.assign({}, base, { cells: new Array(15).fill(0) }))),
     null
@@ -545,4 +552,142 @@ test("no-op and fresh state carry empty transitions and zero gain", () => {
   assert.equal(noop.state.gain, 0)
   same(Game.newGame(0, seq(0, 0.5, 0, 0.5)).transitions, [])
   assert.equal(Game.newGame(0, seq(0, 0.5, 0, 0.5)).gain, 0)
+})
+
+// --- 16. local leaderboard and state v2 (§5) ------------------------------
+
+function lbEntry(score, maxTile, endedAt, won, moves) {
+  return { score, maxTile, moves: moves === undefined ? 1 : moves, endedAt, won: won === true }
+}
+
+test("maxTile returns the highest value or 0", () => {
+  assert.equal(Game.maxTile(new Array(16).fill(0)), 0)
+  assert.equal(Game.maxTile([2, 0, 8, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]), 8)
+  assert.equal(Game.maxTile([2, 2048, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]), 2048)
+})
+
+test("insertEntry ranks by score, then maxTile, then endedAt", () => {
+  const a = Game.insertEntry([], lbEntry(100, 64, 1000))
+  assert.equal(a.rank, 1)
+  const b = Game.insertEntry(a.leaderboard, lbEntry(200, 32, 900))
+  assert.equal(b.rank, 1)
+  same(b.leaderboard.map((e) => e.score), [200, 100])
+  // tie on score -> higher maxTile first
+  const c = Game.insertEntry(b.leaderboard, lbEntry(200, 128, 950))
+  assert.equal(c.rank, 1)
+  // tie on score + maxTile -> older (smaller endedAt) first
+  const d = Game.insertEntry(c.leaderboard, lbEntry(200, 128, 940))
+  assert.equal(d.rank, 1)
+  same(d.leaderboard.map((e) => e.endedAt), [940, 950, 900, 1000])
+})
+
+test("insertEntry truncates to 10 and reports rank 0 when it does not fit", () => {
+  let lb = []
+  for (let i = 1; i <= 10; i++) lb = Game.insertEntry(lb, lbEntry(i * 10, 2, i)).leaderboard
+  const overflow = Game.insertEntry(lb, lbEntry(5, 2, 999))
+  assert.equal(overflow.rank, 0)
+  assert.equal(overflow.leaderboard.length, 10)
+  const better = Game.insertEntry(lb, lbEntry(1000, 2, 999))
+  assert.equal(better.rank, 1)
+  assert.equal(better.leaderboard.length, 10)
+  assert.equal(better.leaderboard[0].score, 1000)
+})
+
+test("recordGame is idempotent and skips zero scores", () => {
+  const state = stateWith([2, 4, 8, 16, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], { score: 40, moves: 5 })
+  const once = Game.recordGame(state, 1000)
+  assert.equal(once.recorded, true)
+  assert.equal(once.leaderboard.length, 1)
+  assert.equal(once.lastRank, 1)
+  assert.equal(once.lastRecordedAt, 1000)
+  const twice = Game.recordGame(once, 2000)
+  assert.equal(twice.leaderboard.length, 1)
+  assert.equal(twice.lastRecordedAt, 1000)
+  const zero = Game.recordGame(stateWith(new Array(16).fill(0), { score: 0 }), 3000)
+  assert.equal(zero.recorded, false)
+  assert.equal(zero.leaderboard.length, 0)
+})
+
+test("startNewGame records the abandoned game and carries best and leaderboard", () => {
+  const state = stateWith([2, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], { score: 12, best: 50, moves: 3 })
+  const next = Game.startNewGame(state, seq(0, 0.5, 0, 0.5), 5000)
+  assert.equal(next.leaderboard.length, 1)
+  assert.equal(next.leaderboard[0].score, 12)
+  assert.equal(next.best, 50)
+  assert.equal(next.startedAt, 5000)
+  assert.equal(next.score, 0)
+  assert.equal(next.recorded, false)
+})
+
+test("a game that ends via move is recorded exactly once", () => {
+  const start = stateWith([8, 16, 32, 0, 8, 16, 32, 64, 16, 32, 64, 128, 32, 64, 128, 256], { score: 300, moves: 10 })
+  const ended = Game.move(start, "right", seq(0.5, 0.5), 7000)
+  assert.equal(ended.state.status, "over")
+  assert.equal(ended.state.recorded, true)
+  assert.equal(ended.state.leaderboard.length, 1)
+  assert.equal(ended.state.leaderboard[0].endedAt, 7000)
+  const after = Game.startNewGame(ended.state, seq(0, 0.5, 0, 0.5), 8000)
+  assert.equal(after.leaderboard.length, 1)
+})
+
+test("recorded entries flag won for a 2048 tile", () => {
+  const big = Game.recordGame(stateWith([2048, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], { score: 2048, moves: 1 }), 1)
+  assert.equal(big.leaderboard[0].won, true)
+  assert.equal(big.leaderboard[0].maxTile, 2048)
+  const small = Game.recordGame(stateWith([2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], { score: 2, moves: 1 }), 2)
+  assert.equal(small.leaderboard[0].won, false)
+})
+
+test("parseState migrates version 1 to version 2", () => {
+  const v1 = JSON.stringify({ version: 1, size: 4, cells: new Array(16).fill(0), score: 5, best: 5, moves: 2, status: "playing", keepPlaying: false })
+  const parsed = Game.parseState(v1)
+  assert.equal(parsed.version, 2)
+  assert.equal(parsed.startedAt, 0)
+  assert.equal(parsed.recorded, false)
+  assert.equal(parsed.lastRank, 0)
+  assert.equal(parsed.lastRecordedAt, 0)
+  same(parsed.leaderboard, [])
+})
+
+test("parseState drops invalid leaderboard entries individually", () => {
+  const payload = {
+    version: 2, size: 4, cells: new Array(16).fill(0), score: 0, best: 0, moves: 0,
+    status: "playing", keepPlaying: false, startedAt: 0, recorded: false, lastRank: 0, lastRecordedAt: 0,
+    leaderboard: [
+      lbEntry(10, 4, 1),
+      { score: "bad", maxTile: 4, moves: 1, endedAt: 2, won: false },
+      lbEntry(30, 3, 3),
+      lbEntry(20, 8, 4)
+    ]
+  }
+  const parsed = Game.parseState(JSON.stringify(payload))
+  assert.equal(parsed.leaderboard.length, 2)
+  same(parsed.leaderboard.map((e) => e.score), [20, 10])
+  const notArray = Game.parseState(JSON.stringify(Object.assign({}, payload, { leaderboard: "nope" })))
+  same(notArray.leaderboard, [])
+})
+
+test("parseState truncates an oversized leaderboard to the top 10", () => {
+  const lb = []
+  for (let i = 1; i <= 12; i++) lb.push(lbEntry(i, 2, i))
+  const payload = { version: 2, size: 4, cells: new Array(16).fill(0), score: 0, best: 0, moves: 0, status: "playing", keepPlaying: false, leaderboard: lb }
+  const parsed = Game.parseState(JSON.stringify(payload))
+  assert.equal(parsed.leaderboard.length, 10)
+  same(parsed.leaderboard.map((e) => e.score), [12, 11, 10, 9, 8, 7, 6, 5, 4, 3])
+})
+
+test("parseState lifts best to the top leaderboard score", () => {
+  const payload = {
+    version: 2, size: 4, cells: new Array(16).fill(0), score: 5, best: 5, moves: 1, status: "playing", keepPlaying: false,
+    leaderboard: [lbEntry(500, 64, 1)]
+  }
+  const parsed = Game.parseState(JSON.stringify(payload))
+  assert.equal(parsed.best, 500)
+})
+
+test("newGame, move and startNewGame keep the same rng call counts", () => {
+  Game.newGame(0, seq(0, 0.5, 0, 0.5))
+  const res = Game.move(stateWith([2, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]), "left", seq(0.5, 0.5))
+  assert.equal(res.moved, true)
+  Game.startNewGame(stateWith([2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], { score: 5 }), seq(0, 0.5, 0, 0.5), 1)
 })
