@@ -824,10 +824,22 @@ Panel {
             border.color: Color.popups.border
             clip: true
 
+            readonly property int margin: Style.space(12)
+            readonly property int colGap: Style.space(8)
+            readonly property int rankW: Style.space(16)
+            readonly property int scoreW: Style.space(56)
+            readonly property int tileW: Style.space(56)
+            readonly property int rowH: Style.space(22)
+            readonly property int dateW: width - margin * 2 - rankW - scoreW - tileW - colGap * 3
+            readonly property color rowDim: Util.alpha(Color.foreground, 0.03)
+            readonly property color latestDim: Util.alpha(Color.accent, 0.18)
+            readonly property color headerInk: Util.alpha(Color.foreground, 0.6)
+
             Column {
               anchors.fill: parent
-              anchors.margins: Style.space(12)
-              spacing: Style.space(5)
+              anchors.margins: scoresView.margin
+              // Spacing is explicit so the ten rows keep a tight, fixed stride.
+              spacing: 0
 
               Text {
                 text: "Top scores"
@@ -837,94 +849,179 @@ Panel {
                 font.pixelSize: Style.font.title
               }
 
+              Item { width: 1; height: Style.space(4) }
+
+              // Column headers: monospaced columns, right-aligned numbers.
               Row {
-                spacing: Style.space(8)
+                id: scoresHeader
+                width: parent.width
+                spacing: scoresView.colGap
 
                 Text {
-                  width: Style.space(18)
+                  width: scoresView.rankW
+                  horizontalAlignment: Text.AlignHCenter
                   text: "#"
-                  color: Color.muted
+                  color: scoresView.headerInk
                   font.family: Style.font.family
                   font.pixelSize: Style.font.bodySmall
                 }
 
                 Text {
-                  width: Style.space(56)
+                  width: scoresView.scoreW
+                  horizontalAlignment: Text.AlignRight
                   text: "Score"
-                  color: Color.muted
+                  color: scoresView.headerInk
                   font.family: Style.font.family
                   font.pixelSize: Style.font.bodySmall
                 }
 
                 Text {
-                  width: Style.space(46)
-                  text: "Tile"
-                  color: Color.muted
+                  width: scoresView.tileW
+                  horizontalAlignment: Text.AlignRight
+                  text: "Best tile"
+                  color: scoresView.headerInk
                   font.family: Style.font.family
                   font.pixelSize: Style.font.bodySmall
                 }
 
                 Text {
+                  width: scoresView.dateW
+                  horizontalAlignment: Text.AlignRight
                   text: "Date"
-                  color: Color.muted
+                  color: scoresView.headerInk
                   font.family: Style.font.family
                   font.pixelSize: Style.font.bodySmall
                 }
               }
+
+              Item { width: 1; height: Style.space(4) }
+
+              Rectangle {
+                width: parent.width
+                height: 1
+                color: Util.alpha(Color.foreground, 0.1)
+              }
+
+              Item { width: 1; height: Style.space(4) }
 
               Repeater {
                 model: root.game.leaderboard
 
-                Row {
+                Item {
                   id: scoreRowItem
                   required property var modelData
                   required property int index
 
-                  readonly property color rowColor: modelData.endedAt === root.game.lastRecordedAt
-                    ? Color.accent : Color.foreground
+                  width: parent.width
+                  height: scoresView.rowH
 
-                  spacing: Style.space(8)
+                  // Records with no timestamp never match; otherwise the last
+                  // recorded game is highlighted.
+                  readonly property bool latest: modelData.endedAt !== 0
+                    && modelData.endedAt === root.game.lastRecordedAt
+                  readonly property color rowColor: latest ? Color.accent : Color.foreground
 
-                  Text {
-                    width: Style.space(18)
-                    text: scoreRowItem.index + 1
-                    color: scoreRowItem.rowColor
-                    font.family: Style.font.family
-                    font.pixelSize: Style.font.bodySmall
+                  Rectangle {
+                    anchors.fill: parent
+                    radius: Style.space(4)
+                    color: scoreRowItem.latest
+                      ? scoresView.latestDim
+                      : (scoreRowItem.index % 2 === 0 ? scoresView.rowDim : "transparent")
                   }
 
-                  Text {
-                    width: Style.space(56)
-                    text: scoreRowItem.modelData.score
-                    color: scoreRowItem.rowColor
-                    font.family: Style.font.family
-                    font.pixelSize: Style.font.bodySmall
-                  }
+                  Row {
+                    anchors.fill: parent
+                    spacing: scoresView.colGap
 
-                  Text {
-                    width: Style.space(46)
-                    text: scoreRowItem.modelData.maxTile
-                    color: scoreRowItem.rowColor
-                    font.family: Style.font.family
-                    font.pixelSize: Style.font.bodySmall
-                  }
+                    // Rank: a filled circle for the podium (1-3), plain text after.
+                    Item {
+                      width: scoresView.rankW
+                      height: parent.height
 
-                  Text {
-                    text: scoreRowItem.modelData.endedAt === 0
-                      ? "—" : Qt.formatDateTime(new Date(scoreRowItem.modelData.endedAt), "yyyy-MM-dd")
-                    color: scoreRowItem.rowColor
-                    font.family: Style.font.family
-                    font.pixelSize: Style.font.bodySmall
+                      Rectangle {
+                        visible: scoreRowItem.index < 3
+                        anchors.centerIn: parent
+                        width: Style.space(16)
+                        height: width
+                        radius: width / 2
+                        color: Util.alpha(Color.accent,
+                          scoreRowItem.index === 0 ? 0.9
+                          : scoreRowItem.index === 1 ? 0.6 : 0.35)
+
+                        Text {
+                          anchors.centerIn: parent
+                          text: scoreRowItem.index + 1
+                          color: scoreRowItem.index === 0 ? Color.popups.background : Color.foreground
+                          font.family: Style.font.family
+                          font.bold: true
+                          font.pixelSize: Style.font.bodySmall
+                        }
+                      }
+
+                      Text {
+                        visible: scoreRowItem.index >= 3
+                        anchors.centerIn: parent
+                        text: scoreRowItem.index + 1
+                        color: scoreRowItem.rowColor
+                        font.family: Style.font.family
+                        font.pixelSize: Style.font.bodySmall
+                      }
+                    }
+
+                    Text {
+                      width: scoresView.scoreW
+                      horizontalAlignment: Text.AlignRight
+                      text: scoreRowItem.modelData.score
+                      color: scoreRowItem.rowColor
+                      font.family: Style.font.family
+                      font.pixelSize: Style.font.bodySmall
+                    }
+
+                    Text {
+                      width: scoresView.tileW
+                      horizontalAlignment: Text.AlignRight
+                      text: scoreRowItem.modelData.maxTile
+                      color: scoreRowItem.rowColor
+                      font.family: Style.font.family
+                      font.pixelSize: Style.font.bodySmall
+                    }
+
+                    Text {
+                      width: scoresView.dateW
+                      horizontalAlignment: Text.AlignRight
+                      text: Game.formatEntryDate(scoreRowItem.modelData.endedAt, Date.now())
+                      color: scoreRowItem.rowColor
+                      font.family: Style.font.family
+                      font.pixelSize: Style.font.bodySmall
+                    }
                   }
                 }
               }
 
-              Text {
+              // Empty state.
+              Column {
                 visible: root.game.leaderboard.length === 0
-                text: "No finished games yet"
-                color: Color.muted
-                font.family: Style.font.family
-                font.pixelSize: Style.font.body
+                width: parent.width
+                spacing: Style.space(6)
+
+                Item { width: 1; height: Style.space(24) }
+
+                Text {
+                  anchors.horizontalCenter: parent.horizontalCenter
+                  text: "\uF091"
+                  color: Color.foreground
+                  opacity: 0.3
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.title * 2
+                }
+
+                Text {
+                  anchors.horizontalCenter: parent.horizontalCenter
+                  text: "No finished games yet"
+                  color: Color.muted
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.body
+                }
               }
             }
           }
