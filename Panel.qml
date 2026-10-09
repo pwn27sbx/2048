@@ -298,13 +298,14 @@ Panel {
         // Top margin so the gain label has room above the SCORE card.
         Item { width: 1; height: Style.space(24) }
 
-        // 1. Header: wordmark, equal stat cards, actions. Every item is
-        //    vertically centred on the same row centre; the right group is an
-        //    anchored chain with one equal Style.space(6) gap.
+        // 1. Header: wordmark on the left; a right group of four equal
+        //    Style.space(44) tiles — SCORE, BEST, Top scores, New game — in one
+        //    Row with equal Style.space(6) gaps. Same width as the board.
         Item {
           id: headerRow
-          width: parent.width
-          height: Math.max(wordmark.implicitHeight, scoreCard.height, newGameButton.height)
+          width: boardFrame.width
+          anchors.horizontalCenter: parent.horizontalCenter
+          height: Style.space(44)
 
           Text {
             id: wordmark
@@ -317,13 +318,16 @@ Panel {
             font.pixelSize: Style.font.title * 1.4
           }
 
+          Row {
+            id: headerTiles
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: Style.space(6)
+
             Rectangle {
               id: scoreCard
-              anchors.right: bestCard.left
-              anchors.rightMargin: Style.space(8)
-              anchors.verticalCenter: parent.verticalCenter
               width: Style.space(64)
-              height: scoreColumn.implicitHeight + Style.space(4) * 2
+              height: Style.space(44)
               color: Util.alpha(Color.foreground, 0.07)
               radius: Style.cornerRadius > 0 ? Style.space(6) : 0
 
@@ -394,11 +398,8 @@ Panel {
 
             Rectangle {
               id: bestCard
-              anchors.right: scoresButton.left
-              anchors.rightMargin: Style.space(6)
-              anchors.verticalCenter: parent.verticalCenter
               width: Style.space(64)
-              height: bestColumn.implicitHeight + Style.space(4) * 2
+              height: Style.space(44)
               color: Util.alpha(root.bestCardCelebrate > 0 ? Color.accent : Color.foreground,
                                 0.07 + 0.28 * root.bestCardCelebrate)
               radius: Style.cornerRadius > 0 ? Style.space(6) : 0
@@ -432,27 +433,18 @@ Panel {
               }
             }
 
-            // Icon-only actions. Sized exactly to the glyph (a qs.Ui Button
-            // offsets an icon-only glyph ~4 px left of centre) so the glyphs
-            // are centred and the gaps equal the spacing.
-            Item {
+            // Top scores tile: same look as the cards, hover lightens it.
+            Rectangle {
               id: scoresButton
-              anchors.right: newGameButton.left
-              anchors.rightMargin: Style.space(6)
-              anchors.verticalCenter: parent.verticalCenter
-              width: scoresMetrics.tightBoundingRect.width
-              height: scoresGlyph.implicitHeight
-
-              TextMetrics {
-                id: scoresMetrics
-                font.family: Style.font.family
-                font.pixelSize: Style.font.icon
-                text: "\uF091"
-              }
+              width: Style.space(44)
+              height: Style.space(44)
+              radius: Style.cornerRadius > 0 ? Style.space(6) : 0
+              color: scoresMouse.containsMouse
+                ? Util.alpha(Color.foreground, 0.12)
+                : Util.alpha(Color.foreground, 0.07)
 
               Text {
-                id: scoresGlyph
-                x: -scoresMetrics.tightBoundingRect.x
+                anchors.centerIn: parent
                 text: "\uF091"
                 color: Color.foreground
                 font.family: Style.font.family
@@ -493,23 +485,18 @@ Panel {
               }
             }
 
-            Item {
+            // New game tile: same look as the cards, hover lightens it.
+            Rectangle {
               id: newGameButton
-              anchors.right: parent.right
-              anchors.verticalCenter: parent.verticalCenter
-              width: newGameMetrics.tightBoundingRect.width
-              height: newGameGlyph.implicitHeight
-
-              TextMetrics {
-                id: newGameMetrics
-                font.family: Style.font.family
-                font.pixelSize: Style.font.icon
-                text: "󰑐"
-              }
+              width: Style.space(44)
+              height: Style.space(44)
+              radius: Style.cornerRadius > 0 ? Style.space(6) : 0
+              color: newGameMouse.containsMouse
+                ? Util.alpha(Color.foreground, 0.12)
+                : Util.alpha(Color.foreground, 0.07)
 
               Text {
-                id: newGameGlyph
-                x: -newGameMetrics.tightBoundingRect.x
+                anchors.centerIn: parent
                 text: "󰑐"
                 color: Color.foreground
                 font.family: Style.font.family
@@ -549,6 +536,7 @@ Panel {
                 }
               }
             }
+          }
         }
 
         Item { width: 1; height: Style.space(14) }
