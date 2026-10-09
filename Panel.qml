@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls
 import Quickshell
 import Quickshell.Io
 import qs.Commons
@@ -297,10 +298,13 @@ Panel {
         // Top margin so the gain label has room above the SCORE card.
         Item { width: 1; height: Style.space(24) }
 
-        // 1. Header: wordmark, equal stat cards, actions.
+        // 1. Header: wordmark, equal stat cards, actions. Every item is
+        //    vertically centred on the same row centre; the right group is an
+        //    anchored chain with one equal Style.space(6) gap.
         Item {
+          id: headerRow
           width: parent.width
-          height: Math.max(wordmark.implicitHeight, headerRow.implicitHeight)
+          height: Math.max(wordmark.implicitHeight, scoreCard.height, newGameButton.height)
 
           Text {
             id: wordmark
@@ -313,14 +317,11 @@ Panel {
             font.pixelSize: Style.font.title * 1.4
           }
 
-          Row {
-            id: headerRow
-            anchors.right: parent.right
-            anchors.verticalCenter: parent.verticalCenter
-            spacing: Style.space(8)
-
             Rectangle {
               id: scoreCard
+              anchors.right: bestCard.left
+              anchors.rightMargin: Style.space(8)
+              anchors.verticalCenter: parent.verticalCenter
               width: Style.space(64)
               height: scoreColumn.implicitHeight + Style.space(4) * 2
               color: Util.alpha(Color.foreground, 0.07)
@@ -393,6 +394,9 @@ Panel {
 
             Rectangle {
               id: bestCard
+              anchors.right: scoresButton.left
+              anchors.rightMargin: Style.space(6)
+              anchors.verticalCenter: parent.verticalCenter
               width: Style.space(64)
               height: bestColumn.implicitHeight + Style.space(4) * 2
               color: Util.alpha(root.bestCardCelebrate > 0 ? Color.accent : Color.foreground,
@@ -428,28 +432,123 @@ Panel {
               }
             }
 
-            Button {
+            // Icon-only actions. Sized exactly to the glyph (a qs.Ui Button
+            // offsets an icon-only glyph ~4 px left of centre) so the glyphs
+            // are centred and the gaps equal the spacing.
+            Item {
               id: scoresButton
-              width: Style.space(34)
-              height: Style.space(34)
-              iconText: "\uF091"
-              iconSize: Style.font.icon
-              tooltipText: "Top scores"
-              foreground: Color.foreground
-              onClicked: root.showScores = !root.showScores
+              anchors.right: newGameButton.left
+              anchors.rightMargin: Style.space(6)
+              anchors.verticalCenter: parent.verticalCenter
+              width: scoresMetrics.tightBoundingRect.width
+              height: scoresGlyph.implicitHeight
+
+              TextMetrics {
+                id: scoresMetrics
+                font.family: Style.font.family
+                font.pixelSize: Style.font.icon
+                text: "\uF091"
+              }
+
+              Text {
+                id: scoresGlyph
+                x: -scoresMetrics.tightBoundingRect.x
+                text: "\uF091"
+                color: Color.foreground
+                font.family: Style.font.family
+                font.pixelSize: Style.font.icon
+              }
+
+              MouseArea {
+                id: scoresMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: {
+                  keyCatcher.forceActiveFocus()
+                  root.showScores = !root.showScores
+                }
+              }
+
+              ToolTip {
+                visible: scoresMouse.containsMouse
+                text: "Top scores"
+                delay: 400
+                padding: 0
+                background: BorderSurface {
+                  color: Color.tooltip.background
+                  borderSpec: Border.localOrSurfaceSpec("tooltip", "border", Color.tooltip.border, Color.tooltip.border, Math.max(1, Style.normalBorderWidth))
+                  radius: 0
+                }
+                contentItem: Text {
+                  text: "Top scores"
+                  color: Color.tooltip.text
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.bodySmall
+                  leftPadding: Style.spacing.controlPaddingX
+                  rightPadding: Style.spacing.controlPaddingX
+                  topPadding: Style.spacing.controlPaddingY
+                  bottomPadding: Style.spacing.controlPaddingY
+                }
+              }
             }
 
-            Button {
+            Item {
               id: newGameButton
-              width: Style.space(34)
-              height: Style.space(34)
-              iconText: "󰑐"
-              iconSize: Style.font.icon
-              tooltipText: "New game"
-              foreground: Color.foreground
-              onClicked: root.newGame()
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              width: newGameMetrics.tightBoundingRect.width
+              height: newGameGlyph.implicitHeight
+
+              TextMetrics {
+                id: newGameMetrics
+                font.family: Style.font.family
+                font.pixelSize: Style.font.icon
+                text: "󰑐"
+              }
+
+              Text {
+                id: newGameGlyph
+                x: -newGameMetrics.tightBoundingRect.x
+                text: "󰑐"
+                color: Color.foreground
+                font.family: Style.font.family
+                font.pixelSize: Style.font.icon
+              }
+
+              MouseArea {
+                id: newGameMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: {
+                  keyCatcher.forceActiveFocus()
+                  root.newGame()
+                }
+              }
+
+              ToolTip {
+                visible: newGameMouse.containsMouse
+                text: "New game"
+                delay: 400
+                padding: 0
+                background: BorderSurface {
+                  color: Color.tooltip.background
+                  borderSpec: Border.localOrSurfaceSpec("tooltip", "border", Color.tooltip.border, Color.tooltip.border, Math.max(1, Style.normalBorderWidth))
+                  radius: 0
+                }
+                contentItem: Text {
+                  text: "New game"
+                  color: Color.tooltip.text
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.bodySmall
+                  leftPadding: Style.spacing.controlPaddingX
+                  rightPadding: Style.spacing.controlPaddingX
+                  topPadding: Style.spacing.controlPaddingY
+                  bottomPadding: Style.spacing.controlPaddingY
+                }
+              }
             }
-          }
         }
 
         Item { width: 1; height: Style.space(14) }
