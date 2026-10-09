@@ -620,6 +620,22 @@ test("startNewGame records the abandoned game and carries best and leaderboard",
   assert.equal(next.recorded, false)
 })
 
+test("startNewGame keeps the last recorded entry highlighted", () => {
+  // The new game itself is not recorded, but it still points at the entry it
+  // just recorded so the scores view can highlight it (§5.1 lastRecordedAt).
+  const state = stateWith([2, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], { score: 12, best: 50, moves: 3 })
+  const next = Game.startNewGame(state, seq(0, 0.5, 0, 0.5), 5000)
+  assert.equal(next.recorded, false)
+  assert.equal(next.lastRank, 1)
+  assert.equal(next.lastRecordedAt, 5000)
+  assert.equal(next.leaderboard[0].endedAt, 5000)
+  // An abandoned zero-score game records nothing and highlights nothing.
+  const zero = Game.startNewGame(stateWith(new Array(16).fill(0), { score: 0 }), seq(0, 0.5, 0, 0.5), 6000)
+  assert.equal(zero.leaderboard.length, 0)
+  assert.equal(zero.lastRecordedAt, 0)
+  assert.equal(zero.lastRank, 0)
+})
+
 test("a game that ends via move is recorded exactly once", () => {
   const start = stateWith([8, 16, 32, 0, 8, 16, 32, 64, 16, 32, 64, 128, 32, 64, 128, 256], { score: 300, moves: 10 })
   const ended = Game.move(start, "right", seq(0.5, 0.5), 7000)
