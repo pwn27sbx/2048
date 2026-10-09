@@ -1,5 +1,6 @@
 import QtQuick
 import Quickshell
+import Quickshell.Io
 import qs.Commons
 import qs.Ui
 import "Game2048.js" as Game
@@ -24,6 +25,10 @@ Panel {
   readonly property var barIdentity: hostWidget || root
 
   property var game: Game.newGame(0, Math.random)
+
+  // Per-user state under XDG state, not shell.json: updateEntryInline rewrites
+  // the user's shell.json, which must not happen on every move (§5.2).
+  readonly property string statePath: Quickshell.env("HOME") + "/.local/state/pwnsxb-2048/state.json"
 
   readonly property int boardGap: Style.space(6)
 
@@ -64,8 +69,29 @@ Panel {
     root.persist()
   }
 
+  // Loaded by the FileView below. Never writes back (that would loop between
+  // monitors): an unreadable or invalid file just starts a fresh game.
+  function applyLoaded(text) {
+    var parsed = Game.parseState(text)
+    root.game = parsed ? parsed : Game.newGame(0, Math.random)
+  }
+
+  // Written only after a user action that changed state.
   function persist() {
-    // Persistence lands in Unit 3 (§5.2).
+    if (!stateFile) return
+    stateFile.setText(Game.serializeState(root.game))
+  }
+
+  FileView {
+    id: stateFile
+    path: root.statePath
+    watchChanges: true
+    blockAllReads: true
+    atomicWrites: true
+    printErrors: false
+    onLoaded: root.applyLoaded(stateFile.text())
+    onLoadFailed: root.applyLoaded("")
+    onFileChanged: reload()
   }
 
   KeyboardPanel {
