@@ -8,6 +8,24 @@ var STATUS_PLAYING = "playing"
 var STATUS_WON = "won"
 var STATUS_OVER = "over"
 
+// Tile style table, indexed by tile level (tileLevel(value)); level 0 is the
+// empty cell and levels >= 11 (2048+) reuse the last row. `solid` marks a fully
+// opaque fill; QML maps `base` to a theme color and `alpha` to its opacity.
+var PALETTE = [
+    { base: "empty", alpha: 0.04, solid: false }, // 0 empty
+    { base: "fg", alpha: 0.12, solid: false },    // 1 2
+    { base: "fg", alpha: 0.22, solid: false },    // 2 4
+    { base: "accent", alpha: 0.28, solid: false },// 3 8
+    { base: "accent", alpha: 0.42, solid: false },// 4 16
+    { base: "accent", alpha: 0.58, solid: false },// 5 32
+    { base: "accent", alpha: 0.76, solid: false },// 6 64
+    { base: "accent", alpha: 1.0, solid: true },  // 7 128
+    { base: "urgent", alpha: 0.45, solid: false },// 8 256
+    { base: "urgent", alpha: 0.65, solid: false },// 9 512
+    { base: "urgent", alpha: 0.85, solid: false },// 10 1024
+    { base: "urgent", alpha: 1.0, solid: true }   // 11 2048+
+]
+
 function emptyState(best) {
     var n = Number(best)
     if (!isFinite(n)) {
@@ -397,4 +415,53 @@ function parseState(text) {
         spawned: -1,
         merged: []
     }
+}
+
+// Clamp any level into the palette's 0..11 range.
+function clampLevel(level) {
+    var n = Math.floor(Number(level))
+    if (!isFinite(n) || n < 0) return 0
+    if (n > 11) return 11
+    return n
+}
+
+function tileStyle(level) {
+    var entry = PALETTE[clampLevel(level)]
+    return { base: entry.base, alpha: entry.alpha, solid: entry.solid }
+}
+
+// WCAG sRGB channel linearization and relative luminance (0..1).
+function channelLuminance(c) {
+    if (c <= 0.03928) return c / 12.92
+    return Math.pow((c + 0.055) / 1.055, 2.4)
+}
+
+function relativeLuminance(r, g, b) {
+    return 0.2126 * channelLuminance(r) + 0.7152 * channelLuminance(g) + 0.0722 * channelLuminance(b)
+}
+
+function contrastRatio(l1, l2) {
+    var hi = Math.max(l1, l2)
+    var lo = Math.min(l1, l2)
+    return (hi + 0.05) / (lo + 0.05)
+}
+
+// Straight alpha compositing of a foreground over an opaque background.
+function blend(fr, fg, fb, alpha, br, bg, bb) {
+    return {
+        r: alpha * fr + (1 - alpha) * br,
+        g: alpha * fg + (1 - alpha) * bg,
+        b: alpha * fb + (1 - alpha) * bb
+    }
+}
+
+// Pick the readable text color on a tile: whichever of fg/bg contrasts more.
+// A tie resolves to "fg".
+function pickTextColor(tile, fg, bg) {
+    var tileLum = relativeLuminance(tile.r, tile.g, tile.b)
+    var fgLum = relativeLuminance(fg.r, fg.g, fg.b)
+    var bgLum = relativeLuminance(bg.r, bg.g, bg.b)
+    var fgContrast = contrastRatio(tileLum, fgLum)
+    var bgContrast = contrastRatio(tileLum, bgLum)
+    return bgContrast > fgContrast ? "bg" : "fg"
 }
