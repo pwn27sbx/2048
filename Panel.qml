@@ -765,13 +765,63 @@ Panel {
                   font.family: Style.font.family
                   font.pixelSize: Style.font.bodySmall
                 }
+
+                Row {
+                  anchors.horizontalCenter: parent.horizontalCenter
+                  spacing: Style.space(8)
+
+                  Button {
+                    visible: root.game.status === Game.STATUS_WON
+                    text: "Keep going"
+                    foreground: Color.accent
+                    onClicked: {
+                      keyCatcher.forceActiveFocus()
+                      root.keepGoing()
+                    }
+                  }
+
+                  Button {
+                    text: "New game"
+                    foreground: root.game.status === Game.STATUS_OVER ? Color.accent : Color.foreground
+                    onClicked: {
+                      keyCatcher.forceActiveFocus()
+                      root.newGame()
+                    }
+                  }
+                }
               }
             }
           }
 
           MouseArea {
+            id: boardDrag
             anchors.fill: parent
-            onClicked: keyCatcher.forceActiveFocus()
+            property real pressX: 0
+            property real pressY: 0
+
+            onPressed: function(mouse) {
+              pressX = mouse.x
+              pressY = mouse.y
+            }
+
+            onReleased: function(mouse) {
+              keyCatcher.forceActiveFocus()
+              if (root.showScores) return
+              if (root.game.status === Game.STATUS_WON || root.game.status === Game.STATUS_OVER) return
+              var dir = Game.swipeDirection(mouse.x - pressX, mouse.y - pressY, Style.space(24))
+              if (dir) root.doMove(dir)
+            }
+          }
+
+          // First-move hint: subtle, fades out after the first move.
+          Text {
+            anchors.centerIn: parent
+            text: "Swipe or use ↑↓←→"
+            color: Color.foreground
+            opacity: (root.game.moves === 0 && root.game.status === Game.STATUS_PLAYING && !root.showScores) ? 0.55 : 0
+            font.family: Style.font.family
+            font.pixelSize: Style.font.body
+            Behavior on opacity { NumberAnimation { duration: 300 } }
           }
 
           // 4. Local leaderboard. Occupies exactly the board's frame so the
@@ -894,18 +944,49 @@ Panel {
 
         Item { width: 1; height: Style.space(10) }
 
-        // 5. Footer hint. One line, inside the panel border.
-        Text {
-          width: parent.width
-          horizontalAlignment: Text.AlignHCenter
-          wrapMode: Text.NoWrap
-          elide: Text.ElideRight
-          text: root.showScores
-            ? "T board · Esc back"
-            : "↑↓←→ move · R new · T scores · Esc close"
-          color: Color.muted
-          font.family: Style.font.family
-          font.pixelSize: Style.font.bodySmall
+        // 5. Footer: centred key chips.
+        Row {
+          id: footerChips
+          anchors.horizontalCenter: parent.horizontalCenter
+          spacing: Style.space(6)
+
+          Repeater {
+            model: root.showScores
+              ? [{ key: "T", label: "board" }, { key: "Esc", label: "back" }]
+              : [{ key: "↑↓←→", label: "move" }, { key: "R", label: "new" },
+                 { key: "T", label: "scores" }, { key: "Esc", label: "close" }]
+
+            Rectangle {
+              required property var modelData
+
+              width: chipRow.implicitWidth + Style.space(6) * 2
+              height: chipRow.implicitHeight + Style.space(2) * 2
+              radius: Style.space(4)
+              color: Util.alpha(Color.foreground, 0.06)
+
+              Row {
+                id: chipRow
+                anchors.centerIn: parent
+                spacing: Style.space(3)
+
+                Text {
+                  text: modelData.key
+                  color: Color.foreground
+                  font.family: Style.font.family
+                  font.bold: true
+                  font.pixelSize: Style.font.bodySmall
+                }
+
+                Text {
+                  text: modelData.label
+                  color: Color.foreground
+                  opacity: 0.65
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.bodySmall
+                }
+              }
+            }
+          }
         }
       }
     }
