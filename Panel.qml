@@ -31,6 +31,20 @@ Panel {
 
   readonly property int boardGap: Style.space(6)
 
+  // Slide animation + score-gain timings (§4.2).
+  readonly property int slideMs: 90
+  readonly property int popMs: 120
+  readonly property int gainMs: 600
+
+  // Transient animation state. `ghosts` mirrors the last move's transitions;
+  // it is never persisted and is cleared when the slide ends.
+  property var ghosts: []
+  property bool sliding: false
+  property int gainValue: 0
+
+  // Emitted by the slide timer so cells pop once the slide has finished.
+  signal popRequested()
+
   function open() {
     root.controller.show()
   }
@@ -52,13 +66,51 @@ Panel {
 
   function doMove(direction) {
     if (!direction) return
+    // Fast input: finish any in-flight slide instantly, then apply normally.
+    // State is always applied immediately; animation is cosmetic only.
+    if (root.sliding) root.finishSlide()
     var result = Game.move(root.game, direction, Math.random)
     if (!result.moved) return
+    root.ghosts = result.state.transitions
+    root.sliding = true
     root.game = result.state
     root.persist()
+    slideTimer.restart()
+    if (result.state.gain > 0) root.pulseGain(result.state.gain)
+  }
+
+  function finishSlide() {
+    slideTimer.stop()
+    root.sliding = false
+    root.ghosts = []
+  }
+
+  // True for a cell that receives a sliding tile (hidden while the ghost moves).
+  function isSlideTarget(index) {
+    if (!root.sliding) return false
+    for (var i = 0; i < root.ghosts.length; i++) {
+      if (root.ghosts[i].to === index) return true
+    }
+    return false
+  }
+
+  function tileFontSize(value) {
+    var digits = String(value).length
+    if (digits <= 2) return Style.font.title * 1.6
+    if (digits === 3) return Style.font.title * 1.3
+    if (digits === 4) return Style.font.title * 1.05
+    return Style.font.title * 0.85
+  }
+
+  function pulseGain(value) {
+    root.gainValue = value
+    gainText.opacity = 1
+    gainText.y = gainText.baseY
+    gainAnim.restart()
   }
 
   function newGame() {
+    if (root.sliding) root.finishSlide()
     root.game = Game.newGame(root.game.best, Math.random)
     root.persist()
   }
@@ -109,6 +161,19 @@ Panel {
     onLoaded: root.applyLoaded(stateFile.text())
     onLoadFailed: root.applyLoaded("")
     onFileChanged: reload()
+  }
+
+  // Single-shot slide timer: when it fires the slide is over and the spawned /
+  // merged cells pop. The only timer in the panel; it runs per move, never idle.
+  Timer {
+    id: slideTimer
+    interval: root.slideMs
+    repeat: false
+    onTriggered: {
+      root.sliding = false
+      root.ghosts = []
+      root.popRequested()
+    }
   }
 
   KeyboardPanel {
@@ -183,6 +248,39 @@ Panel {
                   font.family: Style.font.family
                   font.pixelSize: Style.font.title
                   font.bold: true
+                }
+              }
+
+              // "+N" score gain: anchored right of the value, floats up and fades.
+              Text {
+                id: gainText
+                property real baseY: scoreColumn.y + (scoreColumn.height - height) / 2
+                x: scoreColumn.x + scoreColumn.width + Style.space(6)
+                y: baseY
+                text: "+" + root.gainValue
+                color: Color.accent
+                font.family: Style.font.family
+                font.bold: true
+                font.pixelSize: Style.font.body
+                opacity: 0
+
+                ParallelAnimation {
+                  id: gainAnim
+                  NumberAnimation {
+                    target: gainText
+                    property: "y"
+                    from: gainText.baseY
+                    to: gainText.baseY - Style.space(14)
+                    duration: root.gainMs
+                    easing.type: Easing.OutCubic
+                  }
+                  NumberAnimation {
+                    target: gainText
+                    property: "opacity"
+                    from: 1
+                    to: 0
+                    duration: root.gainMs
+                  }
                 }
               }
             }
@@ -269,6 +367,9 @@ Panel {
                   Rectangle {
                     id: tile
                     anchors.fill: parent
+                    // Hidden while its tile slides in (the ghost is drawn instead).
+                    opacity: (root.sliding
+                      && (root.isSlideTarget(cellRoot.index) || root.game.spawned === cellRoot.index)) ? 0 : 1
                     radius: Style.cornerRadius > 0 ? Style.space(6) : 0
                     color: root.tileColor(cellRoot.level)
 
@@ -279,13 +380,7 @@ Panel {
                       color: root.tileTextColor(cellRoot.level)
                       font.family: Style.font.family
                       font.bold: true
-                      font.pixelSize: {
-                        var digits = String(cellRoot.value).length
-                        if (digits <= 2) return Style.font.title * 1.6
-                        if (digits === 3) return Style.font.title * 1.3
-                        if (digits === 4) return Style.font.title * 1.05
-                        return Style.font.title * 0.85
-                      }
+                      font.pixelSize: root.tileFontSize(cellRoot.value)
                     }
 
                     // Explicit pop: restarted from the handler below when this
@@ -303,7 +398,7 @@ Panel {
                         property: "scale"
                         from: 0.85
                         to: 1.0
-                        duration: 120
+                        duration: root.popMs
                         easing.type: Easing.OutBack
                       }
                     }
@@ -316,10 +411,65 @@ Panel {
                     target: root
 
                     function onGameChanged() {
+                      // A slide owns the movement; the slide timer pops after it.
+                      if (root.sliding) return
                       if (root.game.spawned === cellRoot.index
                           || root.game.merged.indexOf(cellRoot.index) !== -1)
                         popAnim.restart()
                     }
+
+                    function onPopRequested() {
+                      if (root.game.spawned === cellRoot.index
+                          || root.game.merged.indexOf(cellRoot.index) !== -1)
+                        popAnim.restart()
+                    }
+                  }
+                }
+              }
+            }
+
+            // Sliding tiles: ghosts drawn above the grid, in the same
+            // coordinate system (the cell step includes the board padding).
+            Item {
+              id: ghostLayer
+              anchors.fill: parent
+              anchors.margins: root.boardGap
+
+              Repeater {
+                model: root.sliding ? root.ghosts : []
+
+                Rectangle {
+                  id: ghost
+                  required property var modelData
+
+                  readonly property real step: boardFrame.cellSize + root.boardGap
+
+                  width: boardFrame.cellSize
+                  height: boardFrame.cellSize
+                  radius: Style.cornerRadius > 0 ? Style.space(6) : 0
+                  color: root.tileColor(Game.tileLevel(modelData.value))
+
+                  Text {
+                    anchors.centerIn: parent
+                    text: ghost.modelData.value
+                    color: root.tileTextColor(Game.tileLevel(ghost.modelData.value))
+                    font.family: Style.font.family
+                    font.bold: true
+                    font.pixelSize: root.tileFontSize(ghost.modelData.value)
+                  }
+
+                  NumberAnimation on x {
+                    from: (ghost.modelData.from % 4) * ghost.step
+                    to: (ghost.modelData.to % 4) * ghost.step
+                    duration: root.slideMs
+                    easing.type: Easing.OutCubic
+                  }
+
+                  NumberAnimation on y {
+                    from: Math.floor(ghost.modelData.from / 4) * ghost.step
+                    to: Math.floor(ghost.modelData.to / 4) * ghost.step
+                    duration: root.slideMs
+                    easing.type: Easing.OutCubic
                   }
                 }
               }
