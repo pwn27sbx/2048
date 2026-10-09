@@ -42,6 +42,9 @@ Panel {
   property bool sliding: false
   property int gainValue: 0
 
+  // Which view is shown. Not persisted; toggled with `t` / the header button.
+  property bool showScores: false
+
   // Emitted by the slide timer so cells pop once the slide has finished.
   signal popRequested()
 
@@ -66,10 +69,11 @@ Panel {
 
   function doMove(direction) {
     if (!direction) return
+    if (root.showScores) return
     // Fast input: finish any in-flight slide instantly, then apply normally.
     // State is always applied immediately; animation is cosmetic only.
     if (root.sliding) root.finishSlide()
-    var result = Game.move(root.game, direction, Math.random)
+    var result = Game.move(root.game, direction, Math.random, Date.now())
     if (!result.moved) return
     root.ghosts = result.state.transitions
     root.sliding = true
@@ -111,7 +115,8 @@ Panel {
 
   function newGame() {
     if (root.sliding) root.finishSlide()
-    root.game = Game.newGame(root.game.best, Math.random)
+    // Records the current game (if any) to the leaderboard, then starts fresh.
+    root.game = Game.startNewGame(root.game, Math.random, Date.now())
     root.persist()
   }
 
@@ -192,18 +197,28 @@ Panel {
       anchors.fill: parent
       onMoveRequested: function(dx, dy) { root.doMove(Game.directionFromDelta(dx, dy)) }
       onActivateRequested: {
+        if (root.showScores) return
         if (root.game.status === Game.STATUS_OVER) root.newGame()
         else if (root.game.status === Game.STATUS_WON) root.keepGoing()
       }
-      onCloseRequested: root.close()
+      onCloseRequested: {
+        // In the scores view, Esc returns to the board instead of closing.
+        if (root.showScores) root.showScores = false
+        else root.close()
+      }
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(text) {
         var key = text.toLowerCase()
+        if (root.showScores) {
+          if (key === "t") root.showScores = false
+          return
+        }
         if (key === "w") root.doMove("up")
         else if (key === "a") root.doMove("left")
         else if (key === "s") root.doMove("down")
         else if (key === "d") root.doMove("right")
         else if (key === "r") root.newGame()
+        else if (key === "t") root.showScores = true
         else if (key === "c" && root.game.status === Game.STATUS_WON) root.keepGoing()
       }
 
@@ -313,6 +328,20 @@ Panel {
                 }
               }
             }
+          }
+
+          Button {
+            id: scoresButton
+            anchors.right: newGameButton.left
+            anchors.rightMargin: Style.space(6)
+            anchors.verticalCenter: parent.verticalCenter
+            width: Style.space(34)
+            height: Style.space(34)
+            iconText: ""
+            iconSize: Style.font.icon
+            tooltipText: "Top scores"
+            foreground: Color.foreground
+            onClicked: root.showScores = !root.showScores
           }
 
           Button {
@@ -508,8 +537,17 @@ Panel {
 
               Text {
                 anchors.horizontalCenter: parent.horizontalCenter
-                text: "Score " + root.game.score + " · Best tile " + Math.max.apply(null, root.game.cells)
+                text: "Score " + root.game.score + " · Best tile " + Game.maxTile(root.game.cells)
                 color: Color.foreground
+                font.family: Style.font.family
+                font.pixelSize: Style.font.body
+              }
+
+              Text {
+                anchors.horizontalCenter: parent.horizontalCenter
+                visible: root.game.lastRank > 0
+                text: root.game.lastRank === 1 ? "New record!" : "Rank #" + root.game.lastRank + " in your top 10"
+                color: root.game.lastRank === 1 ? Color.accent : Color.foreground
                 font.family: Style.font.family
                 font.pixelSize: Style.font.body
               }
@@ -528,15 +566,134 @@ Panel {
             anchors.fill: parent
             onClicked: keyCatcher.forceActiveFocus()
           }
+
+          // 4. Local leaderboard. Occupies exactly the board's frame so the
+          //    panel never jumps when the view is toggled.
+          Rectangle {
+            id: scoresView
+            anchors.fill: parent
+            visible: root.showScores
+            color: Color.popups.background
+            radius: Style.cornerRadius
+            border.width: Math.max(1, Style.normalBorderWidth)
+            border.color: Color.popups.border
+            clip: true
+
+            Column {
+              anchors.fill: parent
+              anchors.margins: Style.space(12)
+              spacing: Style.space(5)
+
+              Text {
+                text: "Top scores"
+                color: Color.foreground
+                font.family: Style.font.family
+                font.bold: true
+                font.pixelSize: Style.font.title
+              }
+
+              Row {
+                spacing: Style.space(8)
+
+                Text {
+                  width: Style.space(18)
+                  text: "#"
+                  color: Color.muted
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.bodySmall
+                }
+
+                Text {
+                  width: Style.space(56)
+                  text: "Score"
+                  color: Color.muted
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.bodySmall
+                }
+
+                Text {
+                  width: Style.space(46)
+                  text: "Tile"
+                  color: Color.muted
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.bodySmall
+                }
+
+                Text {
+                  text: "Date"
+                  color: Color.muted
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.bodySmall
+                }
+              }
+
+              Repeater {
+                model: root.game.leaderboard
+
+                Row {
+                  id: scoreRowItem
+                  required property var modelData
+                  required property int index
+
+                  readonly property color rowColor: modelData.endedAt === root.game.lastRecordedAt
+                    ? Color.accent : Color.foreground
+
+                  spacing: Style.space(8)
+
+                  Text {
+                    width: Style.space(18)
+                    text: scoreRowItem.index + 1
+                    color: scoreRowItem.rowColor
+                    font.family: Style.font.family
+                    font.pixelSize: Style.font.bodySmall
+                  }
+
+                  Text {
+                    width: Style.space(56)
+                    text: scoreRowItem.modelData.score
+                    color: scoreRowItem.rowColor
+                    font.family: Style.font.family
+                    font.pixelSize: Style.font.bodySmall
+                  }
+
+                  Text {
+                    width: Style.space(46)
+                    text: scoreRowItem.modelData.maxTile
+                    color: scoreRowItem.rowColor
+                    font.family: Style.font.family
+                    font.pixelSize: Style.font.bodySmall
+                  }
+
+                  Text {
+                    text: scoreRowItem.modelData.endedAt === 0
+                      ? "—" : Qt.formatDateTime(new Date(scoreRowItem.modelData.endedAt), "yyyy-MM-dd")
+                    color: scoreRowItem.rowColor
+                    font.family: Style.font.family
+                    font.pixelSize: Style.font.bodySmall
+                  }
+                }
+              }
+
+              Text {
+                visible: root.game.leaderboard.length === 0
+                text: "No finished games yet"
+                color: Color.muted
+                font.family: Style.font.family
+                font.pixelSize: Style.font.body
+              }
+            }
+          }
         }
 
-        // 4. Footer hint. One line, inside the panel border.
+        // 5. Footer hint. One line, inside the panel border.
         Text {
           width: parent.width
           horizontalAlignment: Text.AlignHCenter
           wrapMode: Text.NoWrap
           elide: Text.ElideRight
-          text: "↑↓←→ / HJKL / WASD move · R new · Esc close"
+          text: root.showScores
+            ? "T board · Esc back"
+            : "↑↓←→ move · R new · T scores · Esc close"
           color: Color.muted
           font.family: Style.font.family
           font.pixelSize: Style.font.bodySmall
