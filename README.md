@@ -21,6 +21,13 @@ The classic 2048 sliding-tile game in a keyboard-driven, theme-aware Omarchy bar
 omarchy plugin add https://github.com/pwn27sbx/omarchy-2048.git --enable
 ```
 
+## Requirements
+
+- `python3` — preinstalled on Omarchy.
+- `timeout` — part of coreutils, preinstalled on Omarchy.
+
+No other dependencies.
+
 ## Controls
 
 | Key / input | Action |
@@ -46,15 +53,16 @@ o.bind("SUPER + ALT + 2", "2048", "omarchy-shell pwnsxb.2048 toggle")
 
 ## Data and privacy
 
-- The board, best score and leaderboard are stored in `$HOME/.local/state/pwnsxb-2048/state.json` (XDG state).
+- The board, best score and leaderboard live in `${XDG_STATE_HOME}/pwnsxb-2048/state.json` (default `~/.local/state/pwnsxb-2048/state.json`). `XDG_STATE_HOME` is used only when it is an absolute path; otherwise the default applies.
+- The panel runs one bundled Python helper (`helpers/state_io.py`) with fixed arguments for every state read and write: no shell, no network, no account. The helper stores an owner-only `0600` file, reads at most 64 KiB, and follows no symlinks.
 - The leaderboard is local only: it keeps the top 10 of your own finished games, lives in that same file, and is reset by deleting that file.
-- No network access, no accounts, no shell commands.
-- If the state file is corrupt or unreadable, the game starts a new game and the best score restarts at 0.
+- If the state file is corrupt, oversized or unreadable, the game starts a new game and the best score restarts at 0.
 
 ## Development
 
 ```sh
 node tests/run-model-tests.js
+python3 -m unittest discover -s tests -v
 omarchy plugin validate .
 /usr/lib/qt6/bin/qmllint -I /usr/share/omarchy/shell BarWidget.qml Panel.qml
 ```
@@ -63,7 +71,7 @@ omarchy plugin validate .
 
 ```sh
 omarchy plugin remove pwnsxb.2048 --yes
-rm -rf "$HOME/.local/state/pwnsxb-2048"
+rm -rf "${XDG_STATE_HOME:-$HOME/.local/state}/pwnsxb-2048"
 ```
 
 ## License
