@@ -8,7 +8,9 @@ import "Game2048.js" as Game
 
 // 2048 game popup. Keyboard-driven panel under the bar. All rules and stored
 // data live in Game2048.js; this file renders state and forwards input. The
-// board persists under XDG state through the FileView below.
+// board persists under XDG state through the bounded helper below: reads and
+// writes go through helpers/state_io.py, and the FileView here is only a
+// change signal (it never loads the file's contents).
 Panel {
   id: root
   moduleName: "pwnsxb.2048"
@@ -27,8 +29,23 @@ Panel {
   property var game: Game.newGame(0, Math.random)
 
   // Per-user state under XDG state, not shell.json: updateEntryInline rewrites
-  // the user's shell.json, which must not happen on every move (§5.2).
-  readonly property string statePath: Quickshell.env("HOME") + "/.local/state/pwnsxb-2048/state.json"
+  // the user's shell.json, which must not happen on every move (§5.2). This
+  // path is derived only so the change watcher below can observe the file; the
+  // helper derives the same path itself and is never handed one in argv.
+  readonly property string stateHome: {
+    var xdg = Quickshell.env("XDG_STATE_HOME") || ""
+    return xdg.charAt(0) === "/" ? xdg : Quickshell.env("HOME") + "/.local/state"
+  }
+  readonly property string statePath: root.stateHome + "/pwnsxb-2048/state.json"
+
+  // Bundled Python 3 helper that owns the real state path and enforces the
+  // 64 KiB read cap plus the no-symlink and owner-only rules.
+  readonly property string helperPath: String(Qt.resolvedUrl("helpers/state_io.py")).replace(/^file:\/\//, "")
+
+  // Write serialization: one helper write in flight; a newer state queued while
+  // writing replaces the pending one (latest wins, never two writers).
+  property string pendingWrite: ""
+  property bool writeInFlight: false
 
   readonly property int boardGap: Style.space(6)
 
@@ -160,7 +177,7 @@ Panel {
     root.setScoreInstantly(root.game.score)
   }
 
-  // Loaded by the FileView below. Never writes back (that would loop between
+  // Loaded by the read helper below. Never writes back (that would loop between
   // monitors): an unreadable or invalid file just starts a fresh game.
   function applyLoaded(text) {
     var parsed = Game.parseState(text)
@@ -169,10 +186,29 @@ Panel {
     root.celebratedThisGame = false
   }
 
-  // Written only after a user action that changed state.
+  // Written only after a user action that changed state. One write at a time; a
+  // newer state queued while writing replaces the pending one (latest wins).
   function persist() {
-    if (!stateFile) return
-    stateFile.setText(Game.serializeState(root.game))
+    var text = Game.serializeState(root.game)
+    if (root.writeInFlight) {
+      root.pendingWrite = text
+      return
+    }
+    root.startWrite(text)
+  }
+
+  function startWrite(text) {
+    root.writeInFlight = true
+    writeProcess.pendingData = text
+    writeProcess.stdinEnabled = true
+    writeProcess.running = true
+  }
+
+  // One read at a time, and never while a write is queued or in flight: a read
+  // then would race the writer and could apply a superseded state.
+  function requestRead() {
+    if (readProcess.running || root.writeInFlight || root.pendingWrite !== "") return
+    readProcess.running = true
   }
 
   // Map a tile level to its themed fill color (§3.2). No hex literals.
@@ -193,16 +229,61 @@ Panel {
     return Game.pickTextColor(over, Color.foreground, bg) === "bg" ? bg : Color.foreground
   }
 
+  // The only state data path: a bounded read through the helper. The helper
+  // caps stdout at 64 KiB, so QML never receives more; a non-zero exit or empty
+  // output falls back to a fresh game, exactly as the FileView did before.
+  Process {
+    id: readProcess
+    command: ["timeout", "-k", "1", "3", "python3", "-I", root.helperPath, "read"]
+    running: true
+    stdout: StdioCollector {
+      id: readStdout
+      waitForEnd: true
+    }
+    onExited: function(exitCode) {
+      if (exitCode === 0) root.applyLoaded(String(readStdout.text))
+      else root.applyLoaded("")
+    }
+  }
+
+  // Owner-only atomic write through the helper. The serialized state travels on
+  // stdin only, never in argv, and only one write runs at a time.
+  Process {
+    id: writeProcess
+    property string pendingData: ""
+    command: ["timeout", "-k", "1", "3", "python3", "-I", root.helperPath, "write"]
+    stdinEnabled: false
+    onStarted: {
+      write(pendingData)
+      pendingData = ""
+      stdinEnabled = false
+    }
+    onExited: function(exitCode) {
+      root.writeInFlight = false
+      if (root.pendingWrite !== "") {
+        var next = root.pendingWrite
+        root.pendingWrite = ""
+        root.startWrite(next)
+      } else {
+        // Reconcile: a watcher event that landed during the write was skipped,
+        // so re-read the settled file now that the writer is idle.
+        root.requestRead()
+      }
+    }
+  }
+
+  // Watch only. With preload: false and no text()/data() call, FileView sets up
+  // the change watcher but never loads or parses the file, so no unbounded or
+  // symlink-following read happens through it (Quickshell 0.3.1 FileView).
+  // fileChanged fires for any monitor's rewrite and triggers a capped helper
+  // read instead of reload().
   FileView {
-    id: stateFile
+    id: stateWatcher
+    preload: false
     path: root.statePath
     watchChanges: true
-    blockAllReads: true
-    atomicWrites: true
     printErrors: false
-    onLoaded: root.applyLoaded(stateFile.text())
-    onLoadFailed: root.applyLoaded("")
-    onFileChanged: reload()
+    onFileChanged: root.requestRead()
   }
 
   // Single-shot slide timer: when it fires the slide is over and the spawned /
