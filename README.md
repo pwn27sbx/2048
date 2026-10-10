@@ -18,7 +18,7 @@ The classic 2048 sliding-tile game in a keyboard-driven, theme-aware Omarchy bar
 ## Install
 
 ```sh
-omarchy plugin add https://github.com/pwn27sbx/omarchy-2048.git --enable
+omarchy plugin add https://github.com/pwn27sbx/2048.git --enable
 ```
 
 ## Requirements
