@@ -4,6 +4,13 @@ The classic 2048 sliding-tile game in a keyboard-driven, theme-aware Omarchy bar
 
 ![2048 panel](preview.png)
 
+## Screenshots
+
+| Board | Top scores |
+|:---:|:---:|
+| ![Board mid-game](screenshots/board.png) | ![Top scores](screenshots/scores.png) |
+| ![Win card](screenshots/win.png) | ![Game over card](screenshots/gameover.png) |
+
 ## Features
 
 - Classic 4×4 sliding-tile game with the standard merge rules.
