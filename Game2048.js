@@ -607,6 +607,16 @@ function isNewBest(prevBest, state) {
     return state.best > prevBest
 }
 
+// True when both states belong to the same game instance. `startedAt` is set
+// once per game (newGame/startNewGame) and survives every move, so two states
+// that share it are the same ongoing game while a fresh game always has a
+// different one. A missing/zero startedAt is treated as one shared "unknown"
+// game (e.g. a migrated v1 file), so loading it never resets the celebration.
+function sameGame(a, b) {
+    if (!a || !b) return false
+    return normalizeMs(a.startedAt) === normalizeMs(b.startedAt)
+}
+
 // Direction of a drag: "" below the threshold, else the dominant axis.
 // On an exact |dx| == |dy| tie, the horizontal axis wins.
 function swipeDirection(dx, dy, threshold) {

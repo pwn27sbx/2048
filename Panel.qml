@@ -47,6 +47,17 @@ Panel {
   property string pendingWrite: ""
   property bool writeInFlight: false
 
+  // The serialized text this panel last wrote or loaded. A read that returns
+  // exactly this is our own state echoed back, so applyLoaded ignores it:
+  // re-applying would cut the score count-up short and re-arm the celebration.
+  property string lastStateText: ""
+
+  // Local-change revision. Bumped on every local write; a read captures it when
+  // it starts and drops its result if the revision moved meanwhile, so a read
+  // still in flight when the user moves can never revert the board.
+  property int localRevision: 0
+  property int readRevision: 0
+
   readonly property int boardGap: Style.space(6)
 
   // Slide animation + score-gain timings (§4.2).
@@ -180,16 +191,26 @@ Panel {
   // Loaded by the read helper below. Never writes back (that would loop between
   // monitors): an unreadable or invalid file just starts a fresh game.
   function applyLoaded(text) {
+    // Our own write (or a prior load) echoed back: nothing changed, and
+    // re-applying would cut the score count-up and re-arm the celebration.
+    if (text === root.lastStateText) return
     var parsed = Game.parseState(text)
-    root.game = parsed ? parsed : Game.newGame(0, Math.random)
+    var next = parsed ? parsed : Game.newGame(0, Math.random)
+    // Only a genuinely different game re-arms the once-per-game celebration;
+    // another monitor's move in the same game keeps it spent.
+    var differentGame = !Game.sameGame(root.game, next)
+    root.game = next
+    root.lastStateText = text
+    if (differentGame) root.celebratedThisGame = false
     root.setScoreInstantly(root.game.score)
-    root.celebratedThisGame = false
   }
 
   // Written only after a user action that changed state. One write at a time; a
   // newer state queued while writing replaces the pending one (latest wins).
   function persist() {
     var text = Game.serializeState(root.game)
+    root.lastStateText = text
+    root.localRevision += 1
     if (root.writeInFlight) {
       root.pendingWrite = text
       return
@@ -208,6 +229,7 @@ Panel {
   // then would race the writer and could apply a superseded state.
   function requestRead() {
     if (readProcess.running || root.writeInFlight || root.pendingWrite !== "") return
+    root.readRevision = root.localRevision
     readProcess.running = true
   }
 
@@ -241,6 +263,9 @@ Panel {
       waitForEnd: true
     }
     onExited: function(exitCode) {
+      // A local move landed while this read was in flight: the result is stale,
+      // so drop it and never revert the board.
+      if (root.readRevision !== root.localRevision) return
       if (exitCode === 0) root.applyLoaded(String(readStdout.text))
       else root.applyLoaded("")
     }

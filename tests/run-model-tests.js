@@ -727,6 +727,36 @@ test("isNewBest compares against the previous best", () => {
   assert.equal(Game.isNewBest(120, { best: 100 }), false)
 })
 
+// --- 17b. same-game identity (Phase 4 Unit 12 fix) ------------------------
+
+test("sameGame identifies a game by its startedAt timestamp", () => {
+  // Same startedAt but different cells/score/moves -> the same ongoing game.
+  assert.equal(
+    Game.sameGame(
+      stateWith([2, 0, 0, 0], { startedAt: 1000 }),
+      stateWith([2, 2, 0, 0], { startedAt: 1000, score: 4, moves: 3 })
+    ),
+    true
+  )
+  // A different startedAt is a different game (a new game, or another monitor's R).
+  assert.equal(
+    Game.sameGame(
+      stateWith([2, 0, 0, 0], { startedAt: 1000 }),
+      stateWith([2, 0, 0, 0], { startedAt: 2000 })
+    ),
+    false
+  )
+  // Missing states are never the same game.
+  assert.equal(Game.sameGame(null, stateWith([2, 0, 0, 0], { startedAt: 1000 })), false)
+  assert.equal(Game.sameGame(stateWith([2, 0, 0, 0], { startedAt: 1000 }), null), false)
+  // Two zero/unknown timestamps are treated as the same (migrated v1) game, so
+  // loading one never resets the celebration.
+  assert.equal(
+    Game.sameGame(stateWith([2, 0, 0, 0]), stateWith([0, 2, 0, 0])),
+    true
+  )
+})
+
 // --- 18. swipe direction (§4.1) -------------------------------------------
 
 test("swipeDirection picks the dominant axis above the threshold", () => {
