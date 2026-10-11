@@ -83,6 +83,11 @@ BarWidget {
       if (panelLoader.item && typeof panelLoader.item.openPage === "function")
         panelLoader.item.openPage(name)
     }
+    // Open the inline board-size picker.
+    function picker(): void {
+      if (panelLoader.item && typeof panelLoader.item.openSizePicker === "function")
+        panelLoader.item.openSizePicker()
+    }
   }
 
   // Four rounded tiles in a 2x2 grid, one in the theme accent, echoing a 2048

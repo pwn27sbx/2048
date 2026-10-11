@@ -3090,6 +3090,7 @@ Panel {
       // catcher so it can sit freely under the header chip and above the tabs
       // and the board. `[`/`]` cycle without it; ↑/↓ move, Enter picks; Esc or
       // a click anywhere outside closes it.
+      // Outside-click catcher: a click anywhere on the panel closes the picker.
       MouseArea {
         visible: root.sizePickerOpen
         anchors.fill: parent
@@ -3097,14 +3098,18 @@ Panel {
         onClicked: root.closeSizePicker()
       }
 
+      // Board-size dropdown: a clean popup directly below the header chip,
+      // aligned to the chip's left edge. Solid background, border and a
+      // shadow-like outline, drawn above everything. The selected size shows a
+      // check and accent text; the hovered / keyboard row shows a background.
       Rectangle {
         id: sizePicker
         visible: root.sizePickerOpen
         z: 71
         scale: root.uiScale
         transformOrigin: Item.TopLeft
-        width: Style.space(104)
-        height: sizePickColumn.implicitHeight + Style.space(8)
+        width: Style.space(120)
+        height: sizePickColumn.implicitHeight + Style.space(10)
         x: {
           var p = sizeChipButton.mapToItem(keyCatcher, 0, 0)
           return Math.max(Style.space(2), Math.min(keyCatcher.width - width * root.uiScale - Style.space(2), p.x))
@@ -3115,13 +3120,24 @@ Panel {
         border.width: Math.max(1, Style.normalBorderWidth)
         border.color: Color.popups.border
 
+        // Shadow-like outline just outside the border.
+        Rectangle {
+          anchors.fill: parent
+          anchors.margins: -Style.space(1)
+          z: -1
+          radius: sizePicker.radius + Style.space(1)
+          color: "transparent"
+          border.width: Math.max(1, Style.normalBorderWidth)
+          border.color: Util.alpha(Color.popups.border, 0.55)
+        }
+
         Column {
           id: sizePickColumn
-          width: parent.width - Style.space(8)
-          anchors.horizontalCenter: parent.horizontalCenter
+          anchors.left: parent.left
+          anchors.right: parent.right
           anchors.top: parent.top
-          anchors.topMargin: Style.space(4)
-          spacing: 0
+          anchors.margins: Style.space(5)
+          spacing: Style.space(1)
 
           Text {
             text: "Board size"
@@ -3136,18 +3152,24 @@ Panel {
             Rectangle {
               required property var modelData
               required property int index
+              readonly property bool selected: modelData === root.game.size
+              readonly property bool hovered: index === root.sizePickIndex
 
               width: parent.width
-              height: Style.space(20)
+              height: Style.space(22)
               radius: Style.cornerRadius > 0 ? Style.space(4) : 0
-              color: index === root.sizePickIndex ? Util.alpha(Color.accent, 0.22) : "transparent"
+              color: hovered && !selected ? Util.alpha(Color.foreground, 0.10)
+                : (hovered ? Util.alpha(Color.accent, 0.16) : "transparent")
 
               Text {
                 anchors.left: parent.left
                 anchors.leftMargin: Style.space(6)
+                anchors.right: parent.right
+                anchors.rightMargin: Style.space(6)
                 anchors.verticalCenter: parent.verticalCenter
-                text: (root.game.size === modelData ? "\u2713 " : "   ") + modelData + "×" + modelData
-                color: root.game.size === modelData ? Color.accent : Color.foreground
+                text: (selected ? "\u2713 " : "   ") + modelData + "×" + modelData
+                color: selected ? Color.accent : Color.foreground
+                elide: Text.ElideRight
                 font.family: Style.font.family
                 font.pixelSize: Style.font.bodySmall
               }
