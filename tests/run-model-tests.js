@@ -1406,7 +1406,7 @@ test("emptyStats is zeroed with an 8-bucket histogram", () => {
   same(Game.emptyStats(), {
     games: 0, wins: 0, bestScore: 0, bestTile: 0, moves: 0,
     scoreSum: 0, streak: 0, longestStreak: 0, timeMs: 0,
-    histogram: [0, 0, 0, 0, 0, 0, 0, 0]
+    histogram: [0, 0, 0, 0, 0, 0, 0, 0], recentScores: [], tiles: {}
   })
   assert.equal(Game.HISTOGRAM_SIZE, 8)
 })
@@ -1924,4 +1924,67 @@ test("resetStats clears stats and badges but keeps best, leaderboard, settings a
   assert.equal(reset.daily.done, true, "daily survives")
   // the input profile is not mutated
   assert.equal(profile.stats.overall.games, 1, "resetStats copies")
+})
+
+// =========================================================================
+// Phase 5 · Unit 20 — stats: recent scores + tile distribution
+// =========================================================================
+
+// A finished 4x4 game with a given score and a single top tile.
+function finished(score, tile) {
+  const cells = square(4, 0)
+  cells[0] = tile
+  return playing(cells, 4, { score, moves: 10, status: "over" })
+}
+
+test("emptyStats carries recentScores and tiles", () => {
+  const s = Game.emptyStats()
+  same(s.recentScores, [])
+  same(s.tiles, {})
+})
+
+test("applyGameToStats appends recent scores and counts best tiles", () => {
+  let s = Game.emptyStats()
+  s = Game.applyGameToStats(s, finished(1000, 512), 1)
+  s = Game.applyGameToStats(s, finished(2000, 1024), 2)
+  s = Game.applyGameToStats(s, finished(500, 512), 3)
+  same(s.recentScores, [1000, 2000, 500])
+  same(s.tiles, { "512": 2, "1024": 1 })
+  same(Game.tileDistribution(s), [{ value: 1024, count: 1 }, { value: 512, count: 2 }])
+})
+
+test("recentScores is capped to RECENT_MAX, keeping the newest", () => {
+  let s = Game.emptyStats()
+  for (let i = 1; i <= Game.RECENT_MAX + 5; i++) s = Game.applyGameToStats(s, finished(i * 10, 256), i)
+  assert.equal(s.recentScores.length, Game.RECENT_MAX)
+  assert.equal(s.recentScores[s.recentScores.length - 1], (Game.RECENT_MAX + 5) * 10)
+  assert.equal(s.recentScores[0], 6 * 10)
+})
+
+test("copyStats sanitizes recentScores and tiles and drops junk", () => {
+  const junk = Game.copyStats({
+    recentScores: [1, -2, "x", 3, 2.9],
+    tiles: { "512": 2, "513": 1, "-4": 5, "1024": 0 }
+  })
+  same(junk.recentScores, [1, 3, 2])
+  same(junk.tiles, { "512": 2 })
+})
+
+test("tileDistribution sorts descending, ignores zero counts, handles null", () => {
+  same(Game.tileDistribution({ tiles: { "512": 3, "2048": 1, "1024": 0 } }),
+    [{ value: 2048, count: 1 }, { value: 512, count: 3 }])
+  same(Game.tileDistribution(null), [])
+})
+
+test("recent scores and tiles persist and default on older payloads", () => {
+  const profile = Game.recordStats(Game.emptyProfile(), 4, finished(3000, 2048), 1)
+  const back = Game.parseProfile(Game.serializeProfile(profile))
+  same(back.stats.overall.recentScores, [3000])
+  same(back.stats.overall.tiles, { "2048": 1 })
+  same(back.stats.sizes["4"].tiles, { "2048": 1 })
+  // an older v3 payload without the fields loads empty
+  const payload = { version: 3, activeSize: 4, settings: {}, sizes: {}, stats: { overall: { games: 2 } } }
+  const loaded = Game.parseProfile(JSON.stringify(payload))
+  same(loaded.stats.overall.recentScores, [])
+  same(loaded.stats.overall.tiles, {})
 })

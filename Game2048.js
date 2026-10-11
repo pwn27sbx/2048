@@ -29,6 +29,8 @@ var SOUND_MAX_RATE = 96000
 // Stats / achievements / daily challenge (Unit 16).
 var HISTOGRAM_BOUNDS = [1000, 2000, 4000, 8000, 16000, 32000, 64000]
 var HISTOGRAM_SIZE = HISTOGRAM_BOUNDS.length + 1
+// How many recent finished-game scores each stats object keeps for the trend.
+var RECENT_MAX = 12
 var SWIFT_WIN_MOVES = 100
 var STREAK_TARGET = 5
 var COMEBACK_TILES = 15
@@ -1150,8 +1152,38 @@ function emptyStats() {
     for (var i = 0; i < HISTOGRAM_SIZE; i++) histogram.push(0)
     return {
         games: 0, wins: 0, bestScore: 0, bestTile: 0, moves: 0,
-        scoreSum: 0, streak: 0, longestStreak: 0, timeMs: 0, histogram: histogram
+        scoreSum: 0, streak: 0, longestStreak: 0, timeMs: 0, histogram: histogram,
+        recentScores: [], tiles: {}
     }
+}
+
+// Non-negative integer scores, newest last, capped to RECENT_MAX.
+function sanitizeRecentScores(raw) {
+    var out = []
+    if (Array.isArray(raw)) {
+        for (var i = 0; i < raw.length; i++) {
+            var value = raw[i]
+            if (typeof value !== "number" || !isFinite(value) || value < 0) continue
+            out.push(Math.floor(value))
+        }
+        if (out.length > RECENT_MAX) out = out.slice(out.length - RECENT_MAX)
+    }
+    return out
+}
+
+// Best-tile counts keyed by the tile value (a power of two); zero counts drop.
+function sanitizeTiles(raw) {
+    var out = {}
+    if (raw && typeof raw === "object") {
+        for (var key in raw) {
+            var value = Number(key)
+            var count = Number(raw[key])
+            if (!isPowerOfTwoOrZero(value) || value <= 0) continue
+            if (!isFinite(count) || count <= 0) continue
+            out[String(value)] = Math.floor(count)
+        }
+    }
+    return out
 }
 
 function copyStats(stats) {
@@ -1169,8 +1201,23 @@ function copyStats(stats) {
         streak: normalizeCount(source.streak),
         longestStreak: normalizeCount(source.longestStreak),
         timeMs: normalizeCount(source.timeMs),
-        histogram: histogram
+        histogram: histogram,
+        recentScores: sanitizeRecentScores(source.recentScores),
+        tiles: sanitizeTiles(source.tiles)
     }
+}
+
+// Best-tile distribution as [{ value, count }], highest tile first.
+function tileDistribution(stats) {
+    var tiles = stats && stats.tiles && typeof stats.tiles === "object" ? stats.tiles : {}
+    var out = []
+    for (var key in tiles) {
+        var value = Number(key)
+        var count = Number(tiles[key])
+        if (value > 0 && count > 0) out.push({ value: value, count: count })
+    }
+    out.sort(function (a, b) { return b.value - a.value })
+    return out
 }
 
 function emptyStatsBundle() {
@@ -1211,6 +1258,12 @@ function applyGameToStats(stats, game, endedAt) {
     var end = normalizeMs(endedAt)
     if (start > 0 && end > start) next.timeMs += (end - start)
     next.histogram[histogramBucket(game.score)] += 1
+    next.recentScores.push(normalizeCount(game.score))
+    if (next.recentScores.length > RECENT_MAX) next.recentScores.shift()
+    if (top > 0) {
+        var tileKey = String(top)
+        next.tiles[tileKey] = (next.tiles[tileKey] || 0) + 1
+    }
     return next
 }
 

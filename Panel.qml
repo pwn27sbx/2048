@@ -640,11 +640,20 @@ Panel {
     ]
   }
 
-  function statsHistogramMax() {
-    var histogram = root.statsFor().histogram
-    var max = 1
-    for (var i = 0; i < histogram.length; i++) if (histogram[i] > max) max = histogram[i]
-    return max
+  function statsGames() {
+    var s = root.statsFor()
+    return s ? s.games : 0
+  }
+
+  // Recent finished-game scores (newest last) for the trend sparkline.
+  function statsRecentScores() {
+    var s = root.statsFor()
+    return s && Array.isArray(s.recentScores) ? s.recentScores : []
+  }
+
+  // Best-tile distribution as [{ value, count }], highest tile first.
+  function statsTileDistribution() {
+    return Game.tileDistribution(root.statsFor())
   }
 
   // ---- daily page helpers ----
@@ -2219,40 +2228,104 @@ Panel {
 
               Item { width: 1; height: Style.space(2) }
 
+              // Score trend: a line through the recent finished-game scores.
               Text {
-                text: "Score histogram"
+                text: "Score trend"
                 color: Color.muted
                 font.family: Style.font.family
                 font.pixelSize: Style.font.caption
               }
 
-              Row {
-                id: histogramRow
+              Canvas {
+                id: spark
+                visible: root.statsGames() >= 3
                 width: parent.width
                 height: Style.space(46)
-                spacing: Style.space(3)
+
+                Connections {
+                  target: root
+                  function onProfileChanged() { spark.requestPaint() }
+                  function onStatsSizeChanged() { spark.requestPaint() }
+                }
+                Component.onCompleted: requestPaint()
+
+                onPaint: {
+                  var ctx = getContext("2d")
+                  ctx.clearRect(0, 0, width, height)
+                  var data = root.statsRecentScores()
+                  if (data.length < 2) return
+                  var padX = Style.space(3)
+                  var padY = Style.space(6)
+                  var w = width - padX * 2
+                  var h = height - padY * 2
+                  var maxV = data[0]
+                  var minV = data[0]
+                  for (var i = 1; i < data.length; i++) {
+                    if (data[i] > maxV) maxV = data[i]
+                    if (data[i] < minV) minV = data[i]
+                  }
+                  var range = Math.max(1, maxV - minV)
+                  var step = data.length > 1 ? w / (data.length - 1) : 0
+                  ctx.strokeStyle = Color.accent
+                  ctx.lineWidth = Math.max(1, Style.normalBorderWidth + 1)
+                  ctx.lineJoin = "round"
+                  ctx.beginPath()
+                  for (var j = 0; j < data.length; j++) {
+                    var x = padX + j * step
+                    var y = padY + h - h * (data[j] - minV) / range
+                    if (j === 0) ctx.moveTo(x, y)
+                    else ctx.lineTo(x, y)
+                  }
+                  ctx.stroke()
+                  ctx.fillStyle = Color.accent
+                  for (var k = 0; k < data.length; k++) {
+                    var x2 = padX + k * step
+                    var y2 = padY + h - h * (data[k] - minV) / range
+                    ctx.beginPath()
+                    ctx.arc(x2, y2, Math.max(1, Style.space(2)), 0, Math.PI * 2)
+                    ctx.fill()
+                  }
+                }
+              }
+
+              // Empty state: too few games to draw a meaningful trend.
+              Text {
+                visible: root.statsGames() < 3
+                width: parent.width
+                wrapMode: Text.WordWrap
+                text: "Play a few games to see your score trend and best-tile breakdown."
+                color: Color.muted
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+              }
+
+              // Best-tile distribution as labelled chips.
+              Text {
+                visible: root.statsTileDistribution().length > 0
+                text: "Best tiles"
+                color: Color.muted
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+              }
+
+              Flow {
+                width: parent.width
+                spacing: Style.space(4)
 
                 Repeater {
-                  model: root.statsFor().histogram
+                  model: root.statsTileDistribution()
 
-                  Item {
+                  Rectangle {
                     required property var modelData
-                    width: (histogramRow.width - Style.space(3) * 7) / 8
-                    height: histogramRow.height
-
-                    Rectangle {
-                      anchors.bottom: parent.bottom
-                      width: parent.width
-                      height: Math.max(2, (parent.height - Style.space(12)) * modelData / root.statsHistogramMax())
-                      radius: Style.cornerRadius > 0 ? Style.space(2) : 0
-                      color: Util.alpha(Color.accent, 0.7)
-                    }
+                    width: tileChipLabel.implicitWidth + Style.space(12)
+                    height: Style.space(18)
+                    radius: Style.cornerRadius > 0 ? Style.space(4) : 0
+                    color: Util.alpha(Color.accent, 0.12)
 
                     Text {
-                      anchors.horizontalCenter: parent.horizontalCenter
-                      anchors.bottom: parent.bottom
-                      anchors.bottomMargin: Style.space(1)
-                      text: modelData
+                      id: tileChipLabel
+                      anchors.centerIn: parent
+                      text: modelData.value + " ×" + modelData.count
                       color: Color.foreground
                       font.family: Style.font.family
                       font.pixelSize: Style.font.caption
