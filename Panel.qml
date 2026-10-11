@@ -955,8 +955,11 @@ Panel {
         font.pixelSize: Style.font.bodySmall
       }
 
-      Row {
+      // A Flow so a long chip group (board sizes, palettes) wraps instead of
+      // overflowing the panel width.
+      Flow {
         id: chipHost
+        width: settingRow.width - Style.space(84) - Style.space(6)
         spacing: Style.space(4)
       }
     }
@@ -2721,6 +2724,7 @@ Panel {
 
                 Row {
                   width: parent.width
+                  spacing: Style.space(6)
                   Text {
                     text: "Keyboard"
                     color: Color.foreground
@@ -2728,8 +2732,12 @@ Panel {
                     font.bold: true
                     font.pixelSize: Style.font.title
                   }
-                  Item { width: parent.width - Style.space(80); height: 1 }
+                  Item {
+                    width: Math.max(0, parent.width - Style.space(70) - closeHint.implicitWidth - Style.space(6))
+                    height: 1
+                  }
                   Text {
+                    id: closeHint
                     text: "Esc / ? close"
                     color: Color.muted
                     font.family: Style.font.family
@@ -2739,13 +2747,13 @@ Panel {
 
                 Repeater {
                   model: [
-                    ["← ↑ → ↓  ·  H J K L  ·  W A S D", "Move"],
+                    ["←↑→↓ / H J K L", "Move (or W A S D)"],
                     ["1–6", "Pages: Board, Scores, Stats, Awards, Daily, Setup"],
                     ["T / Shift+T", "Next / previous page"],
-                    ["U  ·  Ctrl+Z", "Undo (out of game over / win)"],
+                    ["U / Ctrl+Z", "Undo (out of game over / win)"],
                     ["R", "New game (confirm if enabled)"],
-                    ["[  ]", "Board size  ·  header chip opens the picker"],
-                    ["Enter / Space", "Keep going (after 2048) · activate"],
+                    ["[  ]", "Board size (header chip opens the picker)"],
+                    ["Enter / Space", "Keep going after 2048 · activate"],
                     ["Esc", "Page → Board · Board → close"],
                     ["?", "This help"],
                     ["Tab / Shift+Tab", "Next / previous bar panel"],
@@ -2753,14 +2761,23 @@ Panel {
                   ]
                   Row {
                     required property var modelData
+                    width: helpColumn.width
                     spacing: Style.space(6)
                     Text {
-                      text: modelData[0]; width: Style.space(150); color: Color.accent
-                      font.family: Style.font.family; font.pixelSize: Style.font.caption
+                      text: modelData[0]
+                      width: Style.space(120)
+                      elide: Text.ElideRight
+                      color: Color.accent
+                      font.family: Style.font.family
+                      font.pixelSize: Style.font.caption
                     }
                     Text {
-                      text: modelData[1]; color: Color.foreground
-                      font.family: Style.font.family; font.pixelSize: Style.font.caption
+                      text: modelData[1]
+                      width: helpColumn.width - Style.space(120) - Style.space(6)
+                      wrapMode: Text.WordWrap
+                      color: Color.foreground
+                      font.family: Style.font.family
+                      font.pixelSize: Style.font.caption
                     }
                   }
                 }
