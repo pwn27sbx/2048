@@ -424,15 +424,17 @@ Panel {
 
   // The tab ring shown by the tab bar: page id, glyph, short label and a
   // "something new" dot (Daily available, unseen badges). Help is not a tab.
+  // Every glyph is from the Nerd Font Material Design set (same family, same
+  // ink height) so the tabs read as one icon family.
   function tabs() {
     return [
-      { page: "", icon: "\u25A6", label: "Board", dot: false },
-      { page: "scores", icon: "\u265B", label: "Scores", dot: false },
-      { page: "stats", icon: "\u25A4", label: "Stats", dot: false },
-      { page: "achievements", icon: "\u2605", label: "Awards",
+      { page: "", icon: "\uDB81\uDD77", label: "Board", dot: false },        // md-view_grid
+      { page: "scores", icon: "\uDB81\uDD99", label: "Scores", dot: false },  // md-trophy
+      { page: "stats", icon: "\uDB81\uDC6A", label: "Stats", dot: false },    // md-insights
+      { page: "achievements", icon: "\uDB81\uDCCE", label: "Awards",          // md-star
         dot: Game.unseenAchievements(root.profile).length > 0 },
-      { page: "daily", icon: "\u25F7", label: "Daily", dot: root.dailyReady },
-      { page: "settings", icon: "\u2699", label: "Setup", dot: false }
+      { page: "daily", icon: "\uDB80\uDCED", label: "Daily", dot: root.dailyReady }, // md-calendar
+      { page: "settings", icon: "\uDB81\uDC93", label: "Setup", dot: false }  // md-settings
     ]
   }
 
@@ -1462,8 +1464,7 @@ Panel {
                 Text {
                   anchors.horizontalCenter: parent.horizontalCenter
                   text: modelData.icon
-                  color: tabItem.active ? Color.accent : Color.foreground
-                  opacity: tabItem.active ? 1 : 0.75
+                  color: tabItem.active ? Color.accent : Color.muted
                   font.family: Style.font.family
                   font.pixelSize: Style.font.icon
                 }
