@@ -26,6 +26,23 @@ var SOUND_BASE_RATE = 24000
 var SOUND_RATE_STEP = 4000
 var SOUND_MIN_RATE = 22050
 var SOUND_MAX_RATE = 96000
+// Stats / achievements / daily challenge (Unit 16).
+var HISTOGRAM_BOUNDS = [1000, 2000, 4000, 8000, 16000, 32000, 64000]
+var HISTOGRAM_SIZE = HISTOGRAM_BOUNDS.length + 1
+var SWIFT_WIN_MOVES = 100
+var STREAK_TARGET = 5
+var COMEBACK_TILES = 15
+var DAILY_HISTORY_MAX = 30
+var ACHIEVEMENTS = [
+    { id: "first512", title: "512", description: "Create a 512 tile." },
+    { id: "first1024", title: "1K", description: "Create a 1024 tile." },
+    { id: "first2048", title: "2048", description: "Create a 2048 tile." },
+    { id: "first4096", title: "4096", description: "Create a 4096 tile." },
+    { id: "win_no_undo", title: "Clean win", description: "Reach 2048 without using undo." },
+    { id: "win_swift", title: "Swift win", description: "Reach 2048 in 100 moves or fewer." },
+    { id: "streak5", title: "On fire", description: "Win 5 games in a row." },
+    { id: "comeback", title: "Comeback", description: "Win from a board with 15 or more tiles." }
+]
 var WIN_VALUE = 2048
 var MAX_STATE_BYTES = 65536
 // Keep profile writes a little under the helper's hard 64 KiB cap.
@@ -877,7 +894,15 @@ function emptyProfile() {
         var size = SUPPORTED_SIZES[i]
         sizes[String(size)] = emptyState(0, size)
     }
-    return { version: VERSION, activeSize: SIZE, settings: defaultSettings(), sizes: sizes }
+    return {
+        version: VERSION,
+        activeSize: SIZE,
+        settings: defaultSettings(),
+        sizes: sizes,
+        stats: emptyStatsBundle(),
+        achievements: [],
+        daily: emptyDaily()
+    }
 }
 
 function copyProfile(profile) {
@@ -892,7 +917,10 @@ function copyProfile(profile) {
         version: VERSION,
         activeSize: profile && isSupportedSize(profile.activeSize) ? Number(profile.activeSize) : SIZE,
         settings: sanitizeSettings(profile ? profile.settings : null),
-        sizes: sizes
+        sizes: sizes,
+        stats: copyStatsBundle(profile ? profile.stats : null),
+        achievements: sanitizeAchievements(profile ? profile.achievements : null),
+        daily: copyDaily(profile ? profile.daily : null)
     }
 }
 
@@ -935,6 +963,324 @@ function updateSettings(profile, patch) {
     var next = copyProfile(profile)
     next.settings = mergeSettings(next.settings, patch)
     return next
+}
+
+// --- stats (Phase 5 · Unit 16) --------------------------------------------
+
+function histogramBucket(score) {
+    var value = Number(score)
+    if (!isFinite(value) || value < 0) value = 0
+    for (var i = 0; i < HISTOGRAM_BOUNDS.length; i++) {
+        if (value < HISTOGRAM_BOUNDS[i]) return i
+    }
+    return HISTOGRAM_BOUNDS.length
+}
+
+function emptyStats() {
+    var histogram = []
+    for (var i = 0; i < HISTOGRAM_SIZE; i++) histogram.push(0)
+    return {
+        games: 0, wins: 0, bestScore: 0, bestTile: 0, moves: 0,
+        scoreSum: 0, streak: 0, longestStreak: 0, timeMs: 0, histogram: histogram
+    }
+}
+
+function copyStats(stats) {
+    var source = stats && typeof stats === "object" ? stats : {}
+    var histogram = []
+    var raw = Array.isArray(source.histogram) ? source.histogram : []
+    for (var i = 0; i < HISTOGRAM_SIZE; i++) histogram.push(normalizeCount(raw[i]))
+    return {
+        games: normalizeCount(source.games),
+        wins: normalizeCount(source.wins),
+        bestScore: normalizeCount(source.bestScore),
+        bestTile: normalizeCount(source.bestTile),
+        moves: normalizeCount(source.moves),
+        scoreSum: normalizeCount(source.scoreSum),
+        streak: normalizeCount(source.streak),
+        longestStreak: normalizeCount(source.longestStreak),
+        timeMs: normalizeCount(source.timeMs),
+        histogram: histogram
+    }
+}
+
+function emptyStatsBundle() {
+    var sizes = {}
+    for (var i = 0; i < SUPPORTED_SIZES.length; i++) sizes[String(SUPPORTED_SIZES[i])] = emptyStats()
+    return { overall: emptyStats(), sizes: sizes }
+}
+
+function copyStatsBundle(bundle) {
+    var source = bundle && typeof bundle === "object" ? bundle : {}
+    var sourceSizes = source.sizes && typeof source.sizes === "object" ? source.sizes : {}
+    var sizes = {}
+    for (var i = 0; i < SUPPORTED_SIZES.length; i++) {
+        sizes[String(SUPPORTED_SIZES[i])] = copyStats(sourceSizes[String(SUPPORTED_SIZES[i])])
+    }
+    return { overall: copyStats(source.overall), sizes: sizes }
+}
+
+// Fold one finished game into a stats object. A win is a board that reached
+// 2048; a loss resets the streak.
+function applyGameToStats(stats, game, endedAt) {
+    var next = copyStats(stats)
+    var top = maxTile(game.cells)
+    var won = top >= WIN_VALUE
+    next.games += 1
+    if (won) {
+        next.wins += 1
+        next.streak += 1
+    } else {
+        next.streak = 0
+    }
+    if (next.streak > next.longestStreak) next.longestStreak = next.streak
+    if (normalizeCount(game.score) > next.bestScore) next.bestScore = normalizeCount(game.score)
+    if (top > next.bestTile) next.bestTile = top
+    next.moves += normalizeCount(game.moves)
+    next.scoreSum += normalizeCount(game.score)
+    var start = normalizeMs(game.startedAt)
+    var end = normalizeMs(endedAt)
+    if (start > 0 && end > start) next.timeMs += (end - start)
+    next.histogram[histogramBucket(game.score)] += 1
+    return next
+}
+
+// Update a size's stats and the overall stats with one finished game.
+function recordStats(profile, size, game, endedAt) {
+    var next = copyProfile(profile)
+    var n = isSupportedSize(size) ? Number(size) : game.size
+    var key = String(n)
+    var end = normalizeMs(endedAt)
+    next.stats.sizes[key] = applyGameToStats(next.stats.sizes[key], game, end)
+    next.stats.overall = applyGameToStats(next.stats.overall, game, end)
+    return next
+}
+
+function winRate(stats) {
+    var games = normalizeCount(stats && stats.games)
+    if (games <= 0) return 0
+    return normalizeCount(stats.wins) / games
+}
+
+function averageScore(stats) {
+    var games = normalizeCount(stats && stats.games)
+    if (games <= 0) return 0
+    return Math.round(normalizeCount(stats.scoreSum) / games)
+}
+
+function occupiedCount(cells) {
+    var count = 0
+    for (var i = 0; i < (cells || []).length; i++) {
+        if (cells[i] !== 0) count += 1
+    }
+    return count
+}
+
+// --- achievements (Phase 5 · Unit 16) -------------------------------------
+
+function sanitizeAchievements(raw) {
+    var owned = []
+    for (var i = 0; i < ACHIEVEMENTS.length; i++) {
+        var id = ACHIEVEMENTS[i].id
+        if (Array.isArray(raw) && raw.indexOf(id) !== -1) owned.push(id)
+    }
+    return owned
+}
+
+// Ids currently satisfied by this game (and the accumulated stats streak).
+function achievementIdsFor(game, stats) {
+    var ids = []
+    if (!game || !Array.isArray(game.cells)) return ids
+    var top = maxTile(game.cells)
+    if (top >= 512) ids.push("first512")
+    if (top >= 1024) ids.push("first1024")
+    if (top >= 2048) ids.push("first2048")
+    if (top >= 4096) ids.push("first4096")
+    var won = top >= WIN_VALUE
+    if (won && game.assisted !== true) ids.push("win_no_undo")
+    if (won && normalizeCount(game.moves) <= SWIFT_WIN_MOVES) ids.push("win_swift")
+    if (won && occupiedCount(game.cells) >= COMEBACK_TILES) ids.push("comeback")
+    if (normalizeCount(stats && stats.streak) >= STREAK_TARGET) ids.push("streak5")
+    return ids
+}
+
+// Merge newly satisfied achievements into the profile; return the ids that were
+// unlocked by this evaluation only.
+function evaluateAchievements(profile, game) {
+    var stats = profile && profile.stats ? profile.stats.overall : null
+    var ids = achievementIdsFor(game, stats)
+    var owned = (profile && Array.isArray(profile.achievements)) ? profile.achievements : []
+    var unlocked = []
+    for (var i = 0; i < ids.length; i++) {
+        if (owned.indexOf(ids[i]) === -1) unlocked.push(ids[i])
+    }
+    if (unlocked.length === 0) return { profile: profile, unlocked: [] }
+    var next = copyProfile(profile)
+    next.achievements = sanitizeAchievements(owned.concat(unlocked))
+    return { profile: next, unlocked: unlocked }
+}
+
+// --- daily challenge (Phase 5 · Unit 16) ----------------------------------
+
+function emptyDaily() {
+    return { date: "", game: null, done: false, result: null, history: [] }
+}
+
+function sanitizeDailyResult(raw) {
+    if (!raw || typeof raw !== "object") return null
+    if (typeof raw.date !== "string" || raw.date.length === 0) return null
+    return {
+        date: raw.date,
+        score: normalizeCount(raw.score),
+        maxTile: isPowerOfTwoOrZero(raw.maxTile) ? raw.maxTile : 0,
+        moves: normalizeCount(raw.moves),
+        won: raw.won === true
+    }
+}
+
+function copyDaily(raw) {
+    var source = raw && typeof raw === "object" ? raw : {}
+    var history = []
+    if (Array.isArray(source.history)) {
+        for (var i = 0; i < source.history.length; i++) {
+            var clean = sanitizeDailyResult(source.history[i])
+            if (clean) history.push(clean)
+        }
+        if (history.length > DAILY_HISTORY_MAX) history = history.slice(history.length - DAILY_HISTORY_MAX)
+    }
+    var game = null
+    if (source.game) {
+        game = parseGameObject(source.game)
+    }
+    return {
+        date: typeof source.date === "string" ? source.date : "",
+        game: game,
+        done: source.done === true,
+        result: sanitizeDailyResult(source.result),
+        history: history
+    }
+}
+
+function dailyToJson(daily) {
+    var source = daily && typeof daily === "object" ? daily : emptyDaily()
+    var history = []
+    for (var i = 0; i < (source.history || []).length; i++) {
+        var result = sanitizeDailyResult(source.history[i])
+        if (result) history.push(result)
+    }
+    return {
+        date: typeof source.date === "string" ? source.date : "",
+        game: source.game ? gameToJson(source.game, true) : null,
+        done: source.done === true,
+        result: sanitizeDailyResult(source.result),
+        history: history
+    }
+}
+
+// Local calendar date as "YYYY-MM-DD".
+function dailyDateKey(date) {
+    var d = (date instanceof Date) ? date : new Date(date)
+    if (!isFinite(d.getTime())) d = new Date()
+    return d.getFullYear() + "-" + pad2(d.getMonth() + 1) + "-" + pad2(d.getDate())
+}
+
+// Seed derived from the date digits (stable across machines/timezones).
+function dailySeed(dateKey) {
+    var digits = String(dateKey).replace(/[^0-9]/g, "")
+    var seed = 0
+    for (var i = 0; i < digits.length; i++) {
+        seed = (seed * 10 + (digits.charCodeAt(i) - 48)) % 2147483647
+    }
+    return seed
+}
+
+// Small, fast, deterministic PRNG (mulberry32) used only for the daily board.
+function mulberry32(seed) {
+    var state = (Number(seed) || 0) >>> 0
+    return function () {
+        state = (state + 0x6D2B79F5) >>> 0
+        var t = state
+        t = Math.imul(t ^ (t >>> 15), t | 1)
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+    }
+}
+
+// The same board for the same date on every machine.
+function newDailyGame(dateKey, now) {
+    return newGame(0, mulberry32(dailySeed(dateKey)), now, [], SIZE)
+}
+
+// "available" (new day), "playing" (today's attempt in progress), "done".
+function dailyStatus(profile, dateKey) {
+    var daily = profile ? profile.daily : null
+    if (!daily || daily.date !== dateKey) return "available"
+    if (daily.done) return "done"
+    return "playing"
+}
+
+function startDaily(profile, dateKey, now) {
+    var next = copyProfile(profile)
+    var history = next.daily ? next.daily.history : []
+    next.daily = { date: dateKey, game: newDailyGame(dateKey, now), done: false, result: null, history: history }
+    return next
+}
+
+function dailyGame(profile) {
+    return (profile && profile.daily && profile.daily.game) ? profile.daily.game : null
+}
+
+function setDailyGame(profile, game) {
+    var next = copyProfile(profile)
+    if (!next.daily) next.daily = emptyDaily()
+    next.daily.game = game ? copyState(game) : null
+    return next
+}
+
+// Record a finished daily attempt (game over or win) into the daily history.
+function finishDaily(profile, now) {
+    var daily = profile ? profile.daily : null
+    if (!daily || !daily.game) return { profile: profile, finished: false, result: null }
+    var game = daily.game
+    if (game.status !== STATUS_OVER && game.status !== STATUS_WON) {
+        return { profile: profile, finished: false, result: null }
+    }
+    var top = maxTile(game.cells)
+    var result = { date: daily.date, score: normalizeCount(game.score), maxTile: top, moves: normalizeCount(game.moves), won: top >= WIN_VALUE }
+    var history = (daily.history || []).slice()
+    history.push(result)
+    if (history.length > DAILY_HISTORY_MAX) history = history.slice(history.length - DAILY_HISTORY_MAX)
+    var next = copyProfile(profile)
+    next.daily = { date: daily.date, game: null, done: true, result: result, history: history }
+    return { profile: next, finished: true, result: result }
+}
+
+// "0:00", "1:05", "1:01:01".
+function formatDuration(ms) {
+    var totalSeconds = Math.floor(normalizeCount(ms) / 1000)
+    var hours = Math.floor(totalSeconds / 3600)
+    var minutes = Math.floor((totalSeconds % 3600) / 60)
+    var seconds = totalSeconds % 60
+    if (hours > 0) return hours + ":" + pad2(minutes) + ":" + pad2(seconds)
+    return minutes + ":" + pad2(seconds)
+}
+
+function groupThousands(value) {
+    var text = String(normalizeCount(value))
+    var out = ""
+    var count = 0
+    for (var i = text.length - 1; i >= 0; i--) {
+        out = text.charAt(i) + out
+        count += 1
+        if (count % 3 === 0 && i > 0) out = "," + out
+    }
+    return out
+}
+
+// "2048 Daily 2026-10-11 · 8,412 · 1024"
+function dailyShareText(result) {
+    if (!result) return ""
+    return "2048 Daily " + result.date + " · " + groupThousands(result.score) + " · " + normalizeCount(result.maxTile)
 }
 
 // Undo is available only with a snapshot left, Allow undo on and the challenge
@@ -1011,7 +1357,10 @@ function profileToJson(profile) {
         version: VERSION,
         activeSize: profile.activeSize,
         settings: sanitizeSettings(profile.settings),
-        sizes: sizes
+        sizes: sizes,
+        stats: copyStatsBundle(profile.stats),
+        achievements: sanitizeAchievements(profile.achievements),
+        daily: dailyToJson(profile.daily)
     }
 }
 
@@ -1023,20 +1372,23 @@ function serializeProfile(profile) {
     var text = JSON.stringify(profileToJson(copy))
     var guard = 0
     while (text.length > SERIALIZE_LIMIT && guard < 1000) {
-        var longestKey = null
+        var target = null
         var longestLen = 0
         for (var i = 0; i < SUPPORTED_SIZES.length; i++) {
-            var key = String(SUPPORTED_SIZES[i])
-            var len = copy.sizes[key].history.length
-            if (len > longestLen) {
-                longestLen = len
-                longestKey = key
+            var history = copy.sizes[String(SUPPORTED_SIZES[i])].history
+            if (history.length > longestLen) {
+                longestLen = history.length
+                target = history
             }
         }
-        if (!longestKey) {
+        if (copy.daily && copy.daily.game && copy.daily.game.history.length > longestLen) {
+            longestLen = copy.daily.game.history.length
+            target = copy.daily.game.history
+        }
+        if (!target || longestLen === 0) {
             break
         }
-        copy.sizes[longestKey].history.shift()
+        target.shift()
         text = JSON.stringify(profileToJson(copy))
         guard += 1
     }
@@ -1089,6 +1441,9 @@ function parseProfile(text) {
             profile.sizes[String(size)] = parsed
         }
     }
+    profile.stats = copyStatsBundle(data.stats)
+    profile.achievements = sanitizeAchievements(data.achievements)
+    profile.daily = copyDaily(data.daily)
     return profile
 }
 

@@ -30,7 +30,12 @@ Panel {
   // plus the shared settings. `game` is the active board, derived from it, so
   // the rendering code keeps reading root.game as before.
   property var profile: Game.emptyProfile()
-  readonly property var game: Game.activeGame(root.profile)
+  // While a daily attempt is in progress the board is that seeded game; every
+  // other moment it is the active size's game.
+  readonly property var dailyGameState: Game.dailyGame(root.profile)
+  readonly property var game: root.playingDaily && root.dailyGameState
+    ? root.dailyGameState
+    : Game.activeGame(root.profile)
   readonly property var gameSettings: root.profile.settings
   readonly property bool canUndo: Game.canUndo(root.game, root.gameSettings)
 
@@ -93,8 +98,18 @@ Panel {
   // Confetti particles for a 2048 (small) / 4096 (big) burst.
   property var confetti: []
 
-  // Which view is shown. Not persisted; toggled with `t` / the header button.
-  property bool showScores: false
+  // Which page is shown: "" (board), "scores", "stats", "achievements",
+  // "daily". Not persisted; cycled with `t` / the header button, or opened by
+  // the bar widget's `page` IPC.
+  property string view: ""
+  readonly property bool onBoard: root.view === ""
+  // Playing today's seeded daily challenge (its own game, kept separate).
+  property bool playingDaily: false
+  // Stats page size filter: 0 = overall, else 3/4/5/6/8.
+  property int statsSize: 0
+  // Queue of achievement ids waiting to be shown as toasts.
+  property var toastQueue: []
+  property string toastId: ""
 
   // Score count-up + best celebration (§3.2).
   property int scoreFrom: 0
@@ -147,13 +162,14 @@ Panel {
 
   function doMove(direction) {
     if (!direction) return
-    if (root.showScores) return
+    if (!root.onBoard) return
     // Fast input: finish any in-flight slide instantly, then apply normally.
     // State is always applied immediately; animation is cosmetic only.
     if (root.sliding) root.finishSlide()
     var prevScore = root.game.score
     var prevBest = root.game.best
     var prevMax = Game.maxTile(root.game.cells)
+    var wasRecorded = root.game.recorded === true
     var result = Game.move(root.game, direction, Math.random, Date.now())
     if (!result.moved) {
       // A direction that changes nothing: shake the board (motion permitting).
@@ -168,7 +184,12 @@ Panel {
       root.ghosts = []
       root.sliding = false
     }
-    root.profile = Game.setGame(root.profile, result.state)
+    root.applyGame(result.state)
+    // A game that just ended is folded into the stats and achievements.
+    if (result.state.recorded === true && !wasRecorded)
+      root.foldStats(result.state, result.state.lastRecordedAt)
+    root.checkAchievements(root.game)
+    root.finishDailyIfDone()
     root.persist()
     if (result.state.gain > 0) root.pulseGain(result.state.gain)
     if (result.state.score !== prevScore) root.animateScore(prevScore, result.state.score)
@@ -267,9 +288,18 @@ Panel {
 
   function newGame() {
     if (root.sliding) root.finishSlide()
+    // In the daily, R leaves the challenge instead of starting a new game.
+    if (root.playingDaily) {
+      root.leaveDaily()
+      return
+    }
     // Records the current game (if any) to the leaderboard, then starts fresh.
-    var next = Game.startNewGame(root.game, Math.random, Date.now())
+    var previous = root.game
+    var next = Game.startNewGame(previous, Math.random, Date.now())
     root.profile = Game.setGame(root.profile, next)
+    if (previous.recorded !== true && previous.score > 0 && next.lastRecordedAt > previous.lastRecordedAt)
+      root.foldStats(previous, next.lastRecordedAt)
+    root.checkAchievements(previous)
     root.persist()
     root.setScoreInstantly(next.score)
     root.celebratedThisGame = false
@@ -286,13 +316,13 @@ Panel {
   // Undo the last move. Also leaves a game over or the win card; the restored
   // board is marked assisted so it never reaches the leaderboard.
   function undo() {
-    if (root.showScores) return
+    if (!root.onBoard) return
     var result = Game.undo(root.game, root.gameSettings)
     if (!result.undone) return
     if (root.sliding) root.finishSlide()
     root.ghosts = []
     root.sliding = false
-    root.profile = Game.setGame(root.profile, result.state)
+    root.applyGame(result.state)
     root.persist()
     root.setScoreInstantly(result.state.score)
   }
@@ -310,6 +340,157 @@ Panel {
     root.setScoreInstantly(Game.activeGame(root.profile).score)
     root.celebratedThisGame = false
     root.confetti = []
+  }
+
+  // Route a game result to the daily held game or the active size's game.
+  function applyGame(next) {
+    if (root.playingDaily) root.profile = Game.setDailyGame(root.profile, next)
+    else root.profile = Game.setGame(root.profile, next)
+  }
+
+  // Fold a freshly recorded game into the profile stats (never for the daily).
+  function foldStats(game, endedAt) {
+    if (root.playingDaily) return
+    root.profile = Game.recordStats(root.profile, game.size, game, endedAt)
+  }
+
+  // Unlock any newly satisfied achievements and queue their toasts.
+  function checkAchievements(game) {
+    var result = Game.evaluateAchievements(root.profile, game)
+    if (result.unlocked.length > 0) {
+      root.profile = result.profile
+      root.enqueueToasts(result.unlocked)
+    }
+  }
+
+  function enqueueToasts(ids) {
+    var queue = (root.toastQueue || []).slice()
+    for (var i = 0; i < ids.length; i++) queue.push(ids[i])
+    root.toastQueue = queue
+    if (root.toastId === "") root.showNextToast()
+  }
+
+  function showNextToast() {
+    if (!root.toastQueue || root.toastQueue.length === 0) {
+      root.toastId = ""
+      return
+    }
+    var queue = root.toastQueue.slice()
+    root.toastId = queue.shift()
+    root.toastQueue = queue
+    toastTimer.restart()
+  }
+
+  function achievementById(id) {
+    for (var i = 0; i < Game.ACHIEVEMENTS.length; i++) {
+      if (Game.ACHIEVEMENTS[i].id === id) return Game.ACHIEVEMENTS[i]
+    }
+    return null
+  }
+
+  // Pages: board -> scores -> stats -> achievements -> daily -> board.
+  function cycleView() {
+    var pages = ["", "scores", "stats", "achievements", "daily"]
+    var index = pages.indexOf(root.view)
+    if (index === -1) index = 0
+    root.view = pages[(index + 1) % pages.length]
+  }
+
+  // Open a page from the header tile, `t`, or the bar widget's `page` IPC.
+  function openPage(name) {
+    var pages = ["", "scores", "stats", "achievements", "daily"]
+    if (pages.indexOf(name) === -1) return
+    root.view = name
+    if (!root.opened) root.open()
+  }
+
+  // ---- daily challenge ----
+  function startDailyPlay() {
+    var dateKey = Game.dailyDateKey(Date.now())
+    if (Game.dailyStatus(root.profile, dateKey) === "done") return
+    if (Game.dailyStatus(root.profile, dateKey) === "available")
+      root.profile = Game.startDaily(root.profile, dateKey, Date.now())
+    root.playingDaily = true
+    root.view = ""
+    root.ghosts = []
+    root.sliding = false
+    root.celebratedThisGame = false
+    root.confetti = []
+    root.persist()
+    root.setScoreInstantly(root.game.score)
+  }
+
+  function leaveDaily() {
+    root.playingDaily = false
+    root.view = "daily"
+  }
+
+  function finishDailyIfDone() {
+    var game = root.game
+    if (!game || (game.status !== Game.STATUS_OVER && game.status !== Game.STATUS_WON)) return
+    var finished = Game.finishDaily(root.profile, Date.now())
+    if (finished.finished) {
+      root.profile = finished.profile
+      root.playingDaily = false
+      root.view = "daily"
+      root.persist()
+    }
+  }
+
+  function copyDailyShare() {
+    var result = root.profile.daily ? root.profile.daily.result : null
+    var text = Game.dailyShareText(result)
+    if (!text) return
+    clipboard.pending = text
+    clipboard.running = false
+    clipboard.running = true
+  }
+
+  // Footer key chips for the current page / mode.
+  function footerChips() {
+    if (root.view !== "") return [{ key: "T", label: "next page" }, { key: "Esc", label: "back" }]
+    if (root.playingDaily)
+      return [{ key: "↑↓←→", label: "move" }, { key: "Esc", label: "leave daily" }]
+    return [{ key: "↑↓←→", label: "move" }, { key: "U", label: "undo" },
+            { key: "R", label: "new" }, { key: "T", label: "pages" },
+            { key: "Esc", label: "close" }]
+  }
+
+  // ---- stats page helpers ----
+  function statsFor() {
+    if (root.statsSize === 0) return root.profile.stats.overall
+    return root.profile.stats.sizes[String(root.statsSize)]
+  }
+
+  function statsRows() {
+    var s = root.statsFor()
+    if (!s) return []
+    return [
+      ["Games", String(s.games)],
+      ["Wins", String(s.wins)],
+      ["Win rate", Math.round(Game.winRate(s) * 100) + "%"],
+      ["Best score", String(s.bestScore)],
+      ["Best tile", String(s.bestTile)],
+      ["Total moves", String(s.moves)],
+      ["Avg score", String(Game.averageScore(s))],
+      ["Best streak", String(s.longestStreak)],
+      ["Time played", Game.formatDuration(s.timeMs)]
+    ]
+  }
+
+  function statsHistogramMax() {
+    var histogram = root.statsFor().histogram
+    var max = 1
+    for (var i = 0; i < histogram.length; i++) if (histogram[i] > max) max = histogram[i]
+    return max
+  }
+
+  // ---- daily page helpers ----
+  function dailyHistory() {
+    var history = root.profile.daily ? root.profile.daily.history : []
+    var out = []
+    for (var i = history.length - 1; i >= 0 && out.length < 5; i--) out.push(history[i])
+    return out
   }
 
   // Loaded by the read helper below. Never writes back (that would loop between
@@ -514,6 +695,27 @@ Panel {
     running: false
   }
 
+  // Copy the daily share text to the clipboard: wl-copy reads the text on
+  // stdin, fixed argv, no shell.
+  Process {
+    id: clipboard
+    property string pending: ""
+    command: ["wl-copy"]
+    stdinEnabled: false
+    onStarted: {
+      write(pending)
+      pending = ""
+      stdinEnabled = false
+    }
+  }
+
+  // How long one achievement toast stays on screen.
+  Timer {
+    id: toastTimer
+    interval: 2600
+    onTriggered: root.showNextToast()
+  }
+
   // Ctrl+Z is a standard undo accelerator. A window Shortcut handles it; the
   // PanelKeyCatcher only reports single-character text keys.
   Shortcut {
@@ -538,20 +740,21 @@ Panel {
       anchors.fill: parent
       onMoveRequested: function(dx, dy) { root.doMove(Game.directionFromDelta(dx, dy)) }
       onActivateRequested: {
-        if (root.showScores) return
+        if (!root.onBoard) return
         if (root.game.status === Game.STATUS_OVER) root.newGame()
         else if (root.game.status === Game.STATUS_WON) root.keepGoing()
       }
       onCloseRequested: {
-        // In the scores view, Esc returns to the board instead of closing.
-        if (root.showScores) root.showScores = false
+        // Esc steps back: a page -> the board, the daily -> its page, else close.
+        if (!root.onBoard) root.view = ""
+        else if (root.playingDaily) root.leaveDaily()
         else root.close()
       }
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(text) {
         var key = text.toLowerCase()
-        if (root.showScores) {
-          if (key === "t") root.showScores = false
+        if (!root.onBoard) {
+          if (key === "t") root.view = ""
           return
         }
         if (key === "w") root.doMove("up")
@@ -562,7 +765,7 @@ Panel {
         else if (key === "u") root.undo()
         else if (key === "[") root.switchSize(-1)
         else if (key === "]") root.switchSize(1)
-        else if (key === "t") root.showScores = true
+        else if (key === "t") root.cycleView()
         else if (key === "c" && root.game.status === Game.STATUS_WON) root.keepGoing()
       }
 
@@ -794,13 +997,13 @@ Panel {
                 cursorShape: Qt.PointingHandCursor
                 onClicked: {
                   keyCatcher.forceActiveFocus()
-                  root.showScores = !root.showScores
+                  root.cycleView()
                 }
               }
 
               ToolTip {
                 visible: scoresMouse.containsMouse
-                text: "Top scores"
+                text: "Pages — T"
                 delay: 400
                 padding: 0
                 background: BorderSurface {
@@ -809,7 +1012,7 @@ Panel {
                   radius: 0
                 }
                 contentItem: Text {
-                  text: "Top scores"
+                  text: "Pages — T"
                   color: Color.tooltip.text
                   font.family: Style.font.family
                   font.pixelSize: Style.font.bodySmall
@@ -1183,7 +1386,7 @@ Panel {
 
             onReleased: function(mouse) {
               keyCatcher.forceActiveFocus()
-              if (root.showScores) return
+              if (!root.onBoard) return
               if (root.game.status === Game.STATUS_WON || root.game.status === Game.STATUS_OVER) return
               var dir = Game.swipeDirection(mouse.x - pressX, mouse.y - pressY, Style.space(24))
               if (dir) root.doMove(dir)
@@ -1195,7 +1398,7 @@ Panel {
             anchors.centerIn: parent
             text: "Swipe or use ↑↓←→"
             color: Color.foreground
-            opacity: (root.game.moves === 0 && root.game.status === Game.STATUS_PLAYING && !root.showScores) ? 0.55 : 0
+            opacity: (root.game.moves === 0 && root.game.status === Game.STATUS_PLAYING && root.onBoard) ? 0.55 : 0
             font.family: Style.font.family
             font.pixelSize: Style.font.body
             Behavior on opacity { NumberAnimation { duration: 300 } }
@@ -1206,7 +1409,7 @@ Panel {
           Rectangle {
             id: scoresView
             anchors.fill: parent
-            visible: root.showScores
+            visible: root.view === "scores"
             color: Color.popups.background
             radius: Style.cornerRadius
             border.width: Math.max(1, Style.normalBorderWidth)
@@ -1448,6 +1651,358 @@ Panel {
             }
           }
 
+          // ---- Stats page (per size and overall) ----
+          Rectangle {
+            visible: root.view === "stats"
+            anchors.fill: parent
+            color: Color.popups.background
+            radius: Style.cornerRadius
+            border.width: Math.max(1, Style.normalBorderWidth)
+            border.color: Color.popups.border
+            clip: true
+
+            Column {
+              anchors.fill: parent
+              anchors.margins: Style.space(12)
+              spacing: Style.space(5)
+
+              Text {
+                text: "Stats"
+                color: Color.foreground
+                font.family: Style.font.family
+                font.bold: true
+                font.pixelSize: Style.font.title
+              }
+
+              Row {
+                spacing: Style.space(4)
+
+                Repeater {
+                  model: [{ label: "All", size: 0 }, { label: "3", size: 3 }, { label: "4", size: 4 },
+                          { label: "5", size: 5 }, { label: "6", size: 6 }, { label: "8", size: 8 }]
+
+                  Rectangle {
+                    required property var modelData
+                    width: sizeChipText.implicitWidth + Style.space(10)
+                    height: Style.space(18)
+                    radius: Style.cornerRadius > 0 ? Style.space(4) : 0
+                    color: root.statsSize === modelData.size
+                      ? Util.alpha(Color.accent, 0.22)
+                      : Util.alpha(Color.foreground, 0.06)
+
+                    Text {
+                      id: sizeChipText
+                      anchors.centerIn: parent
+                      text: modelData.label
+                      color: root.statsSize === modelData.size ? Color.accent : Color.foreground
+                      font.family: Style.font.family
+                      font.pixelSize: Style.font.caption
+                    }
+
+                    MouseArea {
+                      anchors.fill: parent
+                      cursorShape: Qt.PointingHandCursor
+                      onClicked: {
+                        keyCatcher.forceActiveFocus()
+                        root.statsSize = modelData.size
+                      }
+                    }
+                  }
+                }
+              }
+
+              Grid {
+                width: parent.width
+                columns: 2
+                columnSpacing: Style.space(10)
+                rowSpacing: Style.space(3)
+
+                Repeater {
+                  model: root.statsRows()
+
+                  Row {
+                    required property var modelData
+                    spacing: Style.space(4)
+
+                    Text {
+                      text: modelData[0]
+                      width: Style.space(84)
+                      elide: Text.ElideRight
+                      color: Color.muted
+                      font.family: Style.font.family
+                      font.pixelSize: Style.font.bodySmall
+                    }
+                    Text {
+                      text: modelData[1]
+                      color: Color.foreground
+                      font.family: Style.font.family
+                      font.bold: true
+                      font.pixelSize: Style.font.bodySmall
+                    }
+                  }
+                }
+              }
+
+              Item { width: 1; height: Style.space(2) }
+
+              Text {
+                text: "Score histogram"
+                color: Color.muted
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+              }
+
+              Row {
+                id: histogramRow
+                width: parent.width
+                height: Style.space(46)
+                spacing: Style.space(3)
+
+                Repeater {
+                  model: root.statsFor().histogram
+
+                  Item {
+                    required property var modelData
+                    width: (histogramRow.width - Style.space(3) * 7) / 8
+                    height: histogramRow.height
+
+                    Rectangle {
+                      anchors.bottom: parent.bottom
+                      width: parent.width
+                      height: Math.max(2, (parent.height - Style.space(12)) * modelData / root.statsHistogramMax())
+                      radius: Style.cornerRadius > 0 ? Style.space(2) : 0
+                      color: Util.alpha(Color.accent, 0.7)
+                    }
+
+                    Text {
+                      anchors.horizontalCenter: parent.horizontalCenter
+                      anchors.bottom: parent.bottom
+                      anchors.bottomMargin: Style.space(1)
+                      text: modelData
+                      color: Color.foreground
+                      font.family: Style.font.family
+                      font.pixelSize: Style.font.caption
+                    }
+                  }
+                }
+              }
+            }
+          }
+
+          // ---- Achievements page ----
+          Rectangle {
+            visible: root.view === "achievements"
+            anchors.fill: parent
+            color: Color.popups.background
+            radius: Style.cornerRadius
+            border.width: Math.max(1, Style.normalBorderWidth)
+            border.color: Color.popups.border
+            clip: true
+
+            Column {
+              anchors.fill: parent
+              anchors.margins: Style.space(12)
+              spacing: Style.space(6)
+
+              Text {
+                text: "Achievements"
+                color: Color.foreground
+                font.family: Style.font.family
+                font.bold: true
+                font.pixelSize: Style.font.title
+              }
+
+              Grid {
+                id: achievementGrid
+                width: parent.width
+                columns: 2
+                columnSpacing: Style.space(6)
+                rowSpacing: Style.space(6)
+
+                Repeater {
+                  model: Game.ACHIEVEMENTS
+
+                  Rectangle {
+                    required property var modelData
+                    readonly property bool unlocked: root.profile.achievements.indexOf(modelData.id) !== -1
+                    width: (achievementGrid.width - Style.space(6)) / 2
+                    height: Style.space(48)
+                    radius: Style.cornerRadius > 0 ? Style.space(5) : 0
+                    color: unlocked ? Util.alpha(Color.accent, 0.18) : Util.alpha(Color.foreground, 0.05)
+                    border.width: Math.max(1, Style.normalBorderWidth)
+                    border.color: unlocked ? Color.accent : Util.alpha(Color.foreground, 0.15)
+
+                    Column {
+                      anchors.centerIn: parent
+                      width: parent.width - Style.space(8)
+                      spacing: Style.space(1)
+
+                      Text {
+                        width: parent.width
+                        text: (unlocked ? "★ " : "☆ ") + modelData.title
+                        color: unlocked ? Color.accent : Color.muted
+                        font.family: Style.font.family
+                        font.bold: true
+                        font.pixelSize: Style.font.bodySmall
+                      }
+                      Text {
+                        width: parent.width
+                        text: modelData.description
+                        color: Color.muted
+                        wrapMode: Text.WordWrap
+                        maximumLineCount: 2
+                        elide: Text.ElideRight
+                        font.family: Style.font.family
+                        font.pixelSize: Style.font.caption
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+
+          // ---- Daily challenge page ----
+          Rectangle {
+            id: dailyPage
+            visible: root.view === "daily"
+            anchors.fill: parent
+            color: Color.popups.background
+            radius: Style.cornerRadius
+            border.width: Math.max(1, Style.normalBorderWidth)
+            border.color: Color.popups.border
+            clip: true
+
+            readonly property string dateKey: Game.dailyDateKey(Date.now())
+            readonly property string status: Game.dailyStatus(root.profile, dateKey)
+            readonly property var result: root.profile.daily ? root.profile.daily.result : null
+
+            Column {
+              anchors.fill: parent
+              anchors.margins: Style.space(12)
+              spacing: Style.space(6)
+
+              Text {
+                text: "Daily challenge"
+                color: Color.foreground
+                font.family: Style.font.family
+                font.bold: true
+                font.pixelSize: Style.font.title
+              }
+
+              Text {
+                text: dailyPage.dateKey
+                color: Color.muted
+                font.family: Style.font.family
+                font.pixelSize: Style.font.body
+              }
+
+              Text {
+                visible: dailyPage.status === "available"
+                width: parent.width
+                wrapMode: Text.WordWrap
+                text: "A seeded 4×4 board, the same for everyone. One attempt today."
+                color: Color.foreground
+                font.family: Style.font.family
+                font.pixelSize: Style.font.bodySmall
+              }
+
+              Text {
+                visible: dailyPage.status === "playing"
+                text: "Today's attempt is in progress."
+                color: Color.foreground
+                font.family: Style.font.family
+                font.pixelSize: Style.font.bodySmall
+              }
+
+              Button {
+                visible: dailyPage.status !== "done"
+                text: dailyPage.status === "playing" ? "Resume" : "Play daily"
+                foreground: Color.accent
+                onClicked: {
+                  keyCatcher.forceActiveFocus()
+                  root.startDailyPlay()
+                }
+              }
+
+              Column {
+                visible: dailyPage.status === "done" && dailyPage.result !== null
+                width: parent.width
+                spacing: Style.space(4)
+
+                Text {
+                  text: "Score " + (dailyPage.result ? dailyPage.result.score : 0)
+                    + " · Best tile " + (dailyPage.result ? dailyPage.result.maxTile : 0)
+                    + ((dailyPage.result && dailyPage.result.won) ? " · won" : "")
+                  color: Color.foreground
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.body
+                }
+
+                Button {
+                  text: "Copy share text"
+                  foreground: Color.foreground
+                  onClicked: {
+                    keyCatcher.forceActiveFocus()
+                    root.copyDailyShare()
+                  }
+                }
+              }
+
+              Text {
+                visible: root.dailyHistory().length > 0
+                text: "Recent days"
+                color: Color.muted
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+              }
+
+              Repeater {
+                model: root.dailyHistory()
+
+                Text {
+                  required property var modelData
+                  text: modelData.date + "   " + modelData.score + "   " + modelData.maxTile
+                  color: Color.foreground
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.bodySmall
+                }
+              }
+            }
+          }
+
+          // Achievement toast: one at a time, queued, gated by motion.
+          Rectangle {
+            id: toast
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.bottom: parent.bottom
+            anchors.bottomMargin: Style.space(10)
+            z: 40
+            visible: root.toastId !== ""
+            width: Math.min(parent.width - Style.space(16), toastText.implicitWidth + Style.space(20))
+            height: Style.space(22)
+            radius: Style.cornerRadius > 0 ? Style.space(6) : 0
+            color: Color.popups.background
+            border.width: Math.max(1, Style.normalBorderWidth)
+            border.color: Color.accent
+
+            Text {
+              id: toastText
+              anchors.centerIn: parent
+              width: parent.width - Style.space(12)
+              horizontalAlignment: Text.AlignHCenter
+              elide: Text.ElideRight
+              text: {
+                var achievement = root.achievementById(root.toastId)
+                return achievement ? ("★ " + achievement.title + " unlocked") : ""
+              }
+              color: Color.accent
+              font.family: Style.font.family
+              font.bold: true
+              font.pixelSize: Style.font.caption
+            }
+          }
+
           // Assisted marker: a small undo chip shown while a game that used
           // undo is in play, so the player knows it will not be ranked.
           Rectangle {
@@ -1457,7 +2012,7 @@ Panel {
             anchors.margins: Style.space(6)
             visible: root.game.assisted === true
               && root.game.status === Game.STATUS_PLAYING
-              && !root.showScores
+              && root.onBoard
             width: assistedLabel.implicitWidth + Style.space(10)
             height: Style.space(16)
             radius: Style.cornerRadius > 0 ? Style.space(8) : 0
@@ -1512,7 +2067,7 @@ Panel {
             anchors.margins: Style.space(6)
             visible: root.game.combo >= 3
               && root.game.status === Game.STATUS_PLAYING
-              && !root.showScores
+              && root.onBoard
             width: comboLabel.implicitWidth + Style.space(10)
             height: Style.space(16)
             radius: Style.cornerRadius > 0 ? Style.space(8) : 0
@@ -1600,11 +2155,7 @@ Panel {
           spacing: Style.space(6)
 
           Repeater {
-            model: root.showScores
-              ? [{ key: "T", label: "board" }, { key: "Esc", label: "back" }]
-              : [{ key: "↑↓←→", label: "move" }, { key: "U", label: "undo" },
-                 { key: "R", label: "new" }, { key: "T", label: "scores" },
-                 { key: "Esc", label: "close" }]
+            model: root.footerChips()
 
             Rectangle {
               required property var modelData

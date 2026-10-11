@@ -78,6 +78,11 @@ BarWidget {
     function show(): void { root.open() }
     function hide(): void { root.close() }
     function toggle(): void { root.togglePanel() }
+    // Open a page: empty, scores, stats, achievements or daily.
+    function page(name: string): void {
+      if (panelLoader.item && typeof panelLoader.item.openPage === "function")
+        panelLoader.item.openPage(name)
+    }
   }
 
   // Four rounded tiles in a 2x2 grid, one in the theme accent, echoing a 2048

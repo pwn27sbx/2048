@@ -1381,3 +1381,224 @@ test("serializeProfile still stays under MAX_STATE_BYTES with combo included", (
   }
   assert.ok(Game.serializeProfile(profile).length <= 65536)
 })
+
+// =========================================================================
+// Phase 5 · Unit 16 — stats, achievements, daily challenge
+// =========================================================================
+
+function tiles(size, pairs) {
+  const cells = new Array(size * size).fill(0)
+  for (const [i, v] of pairs) cells[i] = v
+  return cells
+}
+
+// --- 28. stats ------------------------------------------------------------
+
+test("emptyStats is zeroed with an 8-bucket histogram", () => {
+  same(Game.emptyStats(), {
+    games: 0, wins: 0, bestScore: 0, bestTile: 0, moves: 0,
+    scoreSum: 0, streak: 0, longestStreak: 0, timeMs: 0,
+    histogram: [0, 0, 0, 0, 0, 0, 0, 0]
+  })
+  assert.equal(Game.HISTOGRAM_SIZE, 8)
+})
+
+test("histogramBucket buckets scores into 8 ranges", () => {
+  assert.equal(Game.histogramBucket(0), 0)
+  assert.equal(Game.histogramBucket(999), 0)
+  assert.equal(Game.histogramBucket(1000), 1)
+  assert.equal(Game.histogramBucket(1999), 1)
+  assert.equal(Game.histogramBucket(2000), 2)
+  assert.equal(Game.histogramBucket(8000), 4)
+  assert.equal(Game.histogramBucket(64000), 7)
+  assert.equal(Game.histogramBucket(1e9), 7)
+  assert.equal(Game.histogramBucket(-5), 0)
+})
+
+test("applyGameToStats accumulates games, wins, streak, best, moves and time", () => {
+  let stats = Game.emptyStats()
+  const won = playing(tiles(4, [[0, 2048]]), 4, { status: "over", score: 2048, moves: 90, startedAt: 1000 })
+  stats = Game.applyGameToStats(stats, won, 6000)
+  assert.equal(stats.games, 1)
+  assert.equal(stats.wins, 1)
+  assert.equal(stats.streak, 1)
+  assert.equal(stats.longestStreak, 1)
+  assert.equal(stats.bestScore, 2048)
+  assert.equal(stats.bestTile, 2048)
+  assert.equal(stats.moves, 90)
+  assert.equal(stats.scoreSum, 2048)
+  assert.equal(stats.timeMs, 5000)
+  assert.equal(stats.histogram[2], 1)
+
+  const lost = playing(tiles(4, [[0, 256]]), 4, { status: "over", score: 400, moves: 20, startedAt: 0 })
+  stats = Game.applyGameToStats(stats, lost, 0)
+  assert.equal(stats.games, 2)
+  assert.equal(stats.wins, 1)
+  assert.equal(stats.streak, 0, "a loss resets the streak")
+  assert.equal(stats.longestStreak, 1)
+  assert.equal(stats.bestTile, 2048)
+  assert.equal(stats.scoreSum, 2448)
+  assert.equal(stats.timeMs, 5000, "a zero startedAt adds no time")
+  assert.equal(stats.histogram[0], 1)
+})
+
+test("recordStats updates the per-size and the overall stats", () => {
+  let profile = Game.emptyProfile()
+  const won = playing(tiles(4, [[0, 2048]]), 4, { status: "over", score: 2048, moves: 90, startedAt: 1000 })
+  profile = Game.recordStats(profile, 4, won, 6000)
+  assert.equal(profile.stats.sizes["4"].games, 1)
+  assert.equal(profile.stats.overall.games, 1)
+  const other = playing(square(8, 0), 8, { status: "over", score: 100, moves: 5 })
+  profile = Game.recordStats(profile, 8, other, 7000)
+  assert.equal(profile.stats.sizes["8"].games, 1)
+  assert.equal(profile.stats.sizes["4"].games, 1)
+  assert.equal(profile.stats.overall.games, 2)
+})
+
+test("winRate and averageScore derive from the counters", () => {
+  let stats = Game.emptyStats()
+  assert.equal(Game.winRate(stats), 0)
+  assert.equal(Game.averageScore(stats), 0)
+  stats = Game.applyGameToStats(stats, playing(tiles(4, [[0, 2048]]), 4, { status: "over", score: 2000, moves: 1 }), 1)
+  stats = Game.applyGameToStats(stats, playing(tiles(4, [[0, 4]]), 4, { status: "over", score: 1000, moves: 1 }), 2)
+  stats = Game.applyGameToStats(stats, playing(tiles(4, [[0, 4]]), 4, { status: "over", score: 1024, moves: 1 }), 3)
+  assert.equal(stats.games, 3)
+  assert.equal(stats.wins, 1)
+  assert.ok(Math.abs(Game.winRate(stats) - (1 / 3)) < 1e-9)
+  assert.equal(Game.averageScore(stats), Math.round((2000 + 1000 + 1024) / 3))
+})
+
+// --- 29. achievements -----------------------------------------------------
+
+test("ACHIEVEMENTS lists the eight ids with a title and description", () => {
+  same(Game.ACHIEVEMENTS.map((a) => a.id), [
+    "first512", "first1024", "first2048", "first4096",
+    "win_no_undo", "win_swift", "streak5", "comeback"
+  ])
+  for (const achievement of Game.ACHIEVEMENTS) {
+    assert.ok(achievement.title.length > 0)
+    assert.ok(achievement.description.length > 0)
+  }
+})
+
+test("achievementIdsFor reports the tile thresholds and win conditions", () => {
+  const big = playing(tiles(4, [[0, 4096]]), 4, { moves: 120 })
+  const ids = Game.achievementIdsFor(big, Game.emptyStats())
+  assert.ok(ids.indexOf("first512") !== -1)
+  assert.ok(ids.indexOf("first1024") !== -1)
+  assert.ok(ids.indexOf("first2048") !== -1)
+  assert.ok(ids.indexOf("first4096") !== -1)
+  assert.ok(ids.indexOf("win_no_undo") !== -1)
+  assert.ok(ids.indexOf("win_swift") === -1, "120 moves is not swift")
+
+  const assisted = playing(tiles(4, [[0, 2048]]), 4, { moves: 40, assisted: true })
+  const assistedIds = Game.achievementIdsFor(assisted, Game.emptyStats())
+  assert.ok(assistedIds.indexOf("win_no_undo") === -1, "an assisted win is not clean")
+  assert.ok(assistedIds.indexOf("win_swift") !== -1)
+
+  const crowded = playing(square(4, 2), 4, { moves: 10 })
+  crowded.cells[0] = 2048
+  assert.ok(Game.achievementIdsFor(crowded, Game.emptyStats()).indexOf("comeback") !== -1)
+
+  assert.ok(Game.achievementIdsFor(playing(square(4, 0), 4), { streak: 5 }).indexOf("streak5") !== -1)
+})
+
+test("evaluateAchievements unlocks once and reports only new ids", () => {
+  const profile = Game.emptyProfile()
+  const game = playing(tiles(4, [[0, 512]]), 4, { moves: 10 })
+  const first = Game.evaluateAchievements(profile, game)
+  assert.ok(first.unlocked.indexOf("first512") !== -1)
+  assert.equal(first.unlocked.length, 1)
+  const second = Game.evaluateAchievements(first.profile, game)
+  assert.equal(second.unlocked.length, 0, "an already unlocked badge is not reported again")
+  assert.ok(second.profile.achievements.indexOf("first512") !== -1)
+})
+
+// --- 30. daily challenge --------------------------------------------------
+
+test("dailyDateKey formats a local date and dailySeed is stable", () => {
+  assert.equal(Game.dailyDateKey(new Date(2026, 9, 11, 12, 0, 0)), "2026-10-11")
+  assert.equal(Game.dailyDateKey(new Date(2026, 0, 3)), "2026-01-03")
+  assert.equal(Game.dailySeed("2026-10-11"), Game.dailySeed("2026-10-11"))
+  assert.notEqual(Game.dailySeed("2026-10-11"), Game.dailySeed("2026-10-12"))
+})
+
+test("mulberry32 is deterministic and stays in [0,1)", () => {
+  const a = Game.mulberry32(12345)
+  const b = Game.mulberry32(12345)
+  const first = [a(), a(), a()]
+  assert.deepEqual(first, [b(), b(), b()])
+  for (const v of first) assert.ok(v >= 0 && v < 1)
+  assert.notEqual(Game.mulberry32(999)(), first[0])
+})
+
+test("newDailyGame is deterministic for a date", () => {
+  const one = Game.newDailyGame("2026-10-11", 1000)
+  const two = Game.newDailyGame("2026-10-11", 1000)
+  assert.equal(JSON.stringify(one.cells), JSON.stringify(two.cells))
+  assert.equal(one.size, 4)
+  assert.equal(one.cells.filter((v) => v !== 0).length, 2)
+  assert.notEqual(JSON.stringify(one.cells), JSON.stringify(Game.newDailyGame("2026-10-12", 1000).cells))
+})
+
+test("the daily flow starts, finishes and keeps a capped history", () => {
+  let profile = Game.emptyProfile()
+  assert.equal(Game.dailyStatus(profile, "2026-10-11"), "available")
+  profile = Game.startDaily(profile, "2026-10-11", 1000)
+  assert.equal(Game.dailyStatus(profile, "2026-10-11"), "playing")
+  assert.ok(Game.dailyGame(profile) !== null)
+  const over = Game.dailyGame(profile)
+  over.status = "over"
+  over.score = 8412
+  over.moves = 300
+  profile = Game.setDailyGame(profile, over)
+  const done = Game.finishDaily(profile, 5000)
+  assert.equal(done.finished, true)
+  assert.equal(Game.dailyStatus(done.profile, "2026-10-11"), "done")
+  assert.equal(done.result.score, 8412)
+  assert.equal(done.profile.daily.history.length, 1)
+  assert.equal(Game.dailyStatus(done.profile, "2026-10-12"), "available", "a new day is available")
+})
+
+test("dailyShareText matches the documented format", () => {
+  assert.equal(Game.dailyShareText({ date: "2026-10-11", score: 8412, maxTile: 1024 }), "2048 Daily 2026-10-11 · 8,412 · 1024")
+  assert.equal(Game.groupThousands(0), "0")
+  assert.equal(Game.groupThousands(1024), "1,024")
+  assert.equal(Game.groupThousands(1000000), "1,000,000")
+})
+
+test("the profile round-trips stats, achievements and daily", () => {
+  let profile = Game.emptyProfile()
+  profile = Game.recordStats(profile, 4, playing(tiles(4, [[0, 2048]]), 4, { status: "over", score: 2048, moves: 100, startedAt: 1 }), 6000)
+  profile = Game.evaluateAchievements(profile, playing(tiles(4, [[0, 512]]), 4)).profile
+  profile = Game.startDaily(profile, "2026-10-11", 1000)
+  const back = Game.parseProfile(Game.serializeProfile(profile))
+  assert.equal(back.stats.sizes["4"].games, 1)
+  assert.equal(back.stats.overall.games, 1)
+  assert.ok(back.achievements.indexOf("first512") !== -1)
+  assert.equal(back.daily.date, "2026-10-11")
+  assert.ok(back.daily.game !== null)
+  assert.equal(back.daily.game.cells.length, 16)
+})
+
+test("parseProfile fills stats, achievements and daily for older payloads", () => {
+  const payload = {
+    version: 3, activeSize: 4,
+    settings: { allowUndo: true, undoLimit: "unlimited", motion: "full", sound: false },
+    sizes: { "4": { version: 3, size: 4, cells: square(4, 0), score: 0, best: 0, moves: 0, status: "playing", keepPlaying: false } }
+  }
+  const profile = Game.parseProfile(JSON.stringify(payload))
+  assert.equal(profile.stats.overall.games, 0)
+  assert.equal(profile.stats.sizes["8"].histogram.length, 8)
+  same(profile.achievements, [])
+  assert.equal(profile.daily.date, "")
+  assert.equal(Game.dailyGame(profile), null)
+})
+
+test("formatDuration formats mm:ss and h:mm:ss", () => {
+  assert.equal(Game.formatDuration(0), "0:00")
+  assert.equal(Game.formatDuration(65000), "1:05")
+  assert.equal(Game.formatDuration(600000), "10:00")
+  assert.equal(Game.formatDuration(3661000), "1:01:01")
+  assert.equal(Game.formatDuration(-5), "0:00")
+})
