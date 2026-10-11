@@ -1906,7 +1906,7 @@ Panel {
                     Text {
                       id: scoreSizeLabel
                       anchors.centerIn: parent
-                      text: modelData
+                      text: modelData + "×" + modelData
                       color: root.scoresSizeValue === modelData ? Color.accent : Color.foreground
                       font.family: Style.font.family
                       font.pixelSize: Style.font.caption
@@ -2156,13 +2156,14 @@ Panel {
                 font.pixelSize: Style.font.title
               }
 
-              Row {
+              Flow {
+                width: parent.width
                 spacing: Style.space(4)
 
                 Repeater {
-                  model: [{ label: "All", size: 0 }, { label: "3", size: 3 }, { label: "4", size: 4 },
-                          { label: "5", size: 5 }, { label: "6", size: 6 }, { label: "7", size: 7 },
-                          { label: "8", size: 8 }]
+                  model: [{ label: "All", size: 0 }, { label: "3×3", size: 3 }, { label: "4×4", size: 4 },
+                          { label: "5×5", size: 5 }, { label: "6×6", size: 6 }, { label: "7×7", size: 7 },
+                          { label: "8×8", size: 8 }]
 
                   Rectangle {
                     required property var modelData
