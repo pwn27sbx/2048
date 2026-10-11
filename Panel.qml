@@ -1366,6 +1366,59 @@ Panel {
                     font.family: Style.font.family
                     font.pixelSize: Style.font.caption
                   }
+
+                  // Assisted marker: sits next to the score (outside the board)
+                  // so it can never cover the top-right tiles.
+                  Rectangle {
+                    id: assistedBadge
+                    visible: root.game.assisted === true
+                      && root.game.status === Game.STATUS_PLAYING
+                      && root.onBoard
+                    width: assistedLabel.implicitWidth + Style.space(10)
+                    height: Style.space(14)
+                    radius: Style.cornerRadius > 0 ? Style.space(7) : 0
+                    color: Util.alpha(Color.accent, 0.18)
+                    border.width: Math.max(1, Style.normalBorderWidth)
+                    border.color: Color.accent
+
+                    Text {
+                      id: assistedLabel
+                      anchors.centerIn: parent
+                      text: "↺ assisted"
+                      color: Color.accent
+                      font.family: Style.font.family
+                      font.bold: true
+                      font.pixelSize: Style.font.caption
+                    }
+
+                    MouseArea {
+                      id: assistedMouse
+                      anchors.fill: parent
+                      hoverEnabled: true
+                    }
+
+                    ToolTip {
+                      visible: assistedMouse.containsMouse
+                      text: "Undo used — this game won't be ranked"
+                      delay: 400
+                      padding: 0
+                      background: BorderSurface {
+                        color: Color.tooltip.background
+                        borderSpec: Border.localOrSurfaceSpec("tooltip", "border", Color.tooltip.border, Color.tooltip.border, Math.max(1, Style.normalBorderWidth))
+                        radius: 0
+                      }
+                      contentItem: Text {
+                        text: "Undo used — this game won't be ranked"
+                        color: Color.tooltip.text
+                        font.family: Style.font.family
+                        font.pixelSize: Style.font.bodySmall
+                        leftPadding: Style.spacing.controlPaddingX
+                        rightPadding: Style.spacing.controlPaddingX
+                        topPadding: Style.spacing.controlPaddingY
+                        bottomPadding: Style.spacing.controlPaddingY
+                      }
+                    }
+                  }
                 }
               }
             }
@@ -2883,62 +2936,6 @@ Panel {
               font.family: Style.font.family
               font.bold: true
               font.pixelSize: Style.font.caption
-            }
-          }
-
-          // Assisted marker: a small undo chip shown while a game that used
-          // undo is in play, so the player knows it will not be ranked.
-          Rectangle {
-            id: assistedBadge
-            anchors.top: parent.top
-            anchors.right: parent.right
-            anchors.margins: Style.space(6)
-            visible: root.game.assisted === true
-              && root.game.status === Game.STATUS_PLAYING
-              && root.onBoard
-            width: assistedLabel.implicitWidth + Style.space(10)
-            height: Style.space(16)
-            radius: Style.cornerRadius > 0 ? Style.space(8) : 0
-            color: Color.popups.background
-            border.width: Math.max(1, Style.normalBorderWidth)
-            border.color: Color.accent
-
-            Text {
-              id: assistedLabel
-              anchors.centerIn: parent
-              text: "↺ assisted"
-              color: Color.accent
-              font.family: Style.font.family
-              font.bold: true
-              font.pixelSize: Style.font.caption
-            }
-
-            MouseArea {
-              id: assistedMouse
-              anchors.fill: parent
-              hoverEnabled: true
-            }
-
-            ToolTip {
-              visible: assistedMouse.containsMouse
-              text: "Undo used — this game won't be ranked"
-              delay: 400
-              padding: 0
-              background: BorderSurface {
-                color: Color.tooltip.background
-                borderSpec: Border.localOrSurfaceSpec("tooltip", "border", Color.tooltip.border, Color.tooltip.border, Math.max(1, Style.normalBorderWidth))
-                radius: 0
-              }
-              contentItem: Text {
-                text: "Undo used — this game won't be ranked"
-                color: Color.tooltip.text
-                font.family: Style.font.family
-                font.pixelSize: Style.font.bodySmall
-                leftPadding: Style.spacing.controlPaddingX
-                rightPadding: Style.spacing.controlPaddingX
-                topPadding: Style.spacing.controlPaddingY
-                bottomPadding: Style.spacing.controlPaddingY
-              }
             }
           }
 
