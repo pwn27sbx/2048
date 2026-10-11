@@ -107,6 +107,8 @@ Panel {
   property bool playingDaily: false
   // Stats page size filter: 0 = overall, else 3/4/5/6/8.
   property int statsSize: 0
+  // Scores page size filter: 0 = follow the active board, else 3/4/5/6/8.
+  property int scoresSize: 0
   // Every page, in cycle order.
   readonly property var pageList: ["", "scores", "stats", "achievements", "daily", "settings", "help"]
   // Window scale factor (90-150 %).
@@ -599,6 +601,18 @@ Panel {
       return [{ key: "1-6", label: "pages" }, { key: "T", label: "next" }, { key: "?", label: "help" }]
     return [{ key: "↑↓←→", label: "move" }, { key: "U", label: "undo" },
             { key: "R", label: "new" }, { key: "?", label: "help" }]
+  }
+
+  // ---- scores page helpers ----
+  // The size whose leaderboard is shown (0 follows the active board).
+  readonly property int scoresSizeValue: root.scoresSize === 0 ? root.game.size : root.scoresSize
+  function scoresLeaderboard() {
+    var g = root.profile.sizes[String(root.scoresSizeValue)]
+    return g && g.leaderboard ? g.leaderboard : []
+  }
+  // Only the active size's latest game can be highlighted.
+  function scoresLatest() {
+    return root.scoresSizeValue === root.game.size ? root.game.lastRecordedAt : 0
   }
 
   // ---- stats page helpers ----
@@ -1766,6 +1780,7 @@ Panel {
             id: scoresView
             anchors.fill: parent
             visible: root.view === "scores"
+            opacity: root.pageT
             color: Color.popups.background
             radius: Style.cornerRadius
             border.width: Math.max(1, Style.normalBorderWidth)
@@ -1791,12 +1806,51 @@ Panel {
               // Spacing is explicit so the ten rows keep a tight, fixed stride.
               spacing: 0
 
-              Text {
-                text: "Top scores"
-                color: Color.foreground
-                font.family: Style.font.family
-                font.bold: true
-                font.pixelSize: Style.font.title
+              Row {
+                width: parent.width
+                spacing: Style.space(4)
+
+                Text {
+                  text: "Top scores"
+                  color: Color.foreground
+                  font.family: Style.font.family
+                  font.bold: true
+                  font.pixelSize: Style.font.title
+                }
+
+                // Size selector: glance at another size's leaderboard without
+                // leaving the page (0 follows the active board is not offered).
+                Repeater {
+                  model: [3, 4, 5, 6, 7, 8]
+
+                  Rectangle {
+                    required property var modelData
+                    width: scoreSizeLabel.implicitWidth + Style.space(8)
+                    height: Style.space(16)
+                    radius: Style.cornerRadius > 0 ? Style.space(4) : 0
+                    color: root.scoresSizeValue === modelData
+                      ? Util.alpha(Color.accent, 0.22)
+                      : Util.alpha(Color.foreground, 0.05)
+
+                    Text {
+                      id: scoreSizeLabel
+                      anchors.centerIn: parent
+                      text: modelData
+                      color: root.scoresSizeValue === modelData ? Color.accent : Color.foreground
+                      font.family: Style.font.family
+                      font.pixelSize: Style.font.caption
+                    }
+
+                    MouseArea {
+                      anchors.fill: parent
+                      cursorShape: Qt.PointingHandCursor
+                      onClicked: {
+                        keyCatcher.forceActiveFocus()
+                        root.scoresSize = modelData
+                      }
+                    }
+                  }
+                }
               }
 
               Item { width: 1; height: Style.space(4) }
@@ -1872,7 +1926,7 @@ Panel {
               Item { width: 1; height: Style.space(4) }
 
               Repeater {
-                model: root.game.leaderboard
+                model: root.scoresLeaderboard()
 
                 Item {
                   id: scoreRowItem
@@ -1883,9 +1937,9 @@ Panel {
                   height: scoresView.rowH
 
                   // Records with no timestamp never match; otherwise the last
-                  // recorded game is highlighted.
+                  // recorded game of the shown size is highlighted.
                   readonly property bool latest: modelData.endedAt !== 0
-                    && modelData.endedAt === root.game.lastRecordedAt
+                    && modelData.endedAt === root.scoresLatest()
                   readonly property color rowColor: latest ? Color.accent : Color.foreground
 
                   Rectangle {
@@ -1981,7 +2035,7 @@ Panel {
 
               // Empty state.
               Column {
-                visible: root.game.leaderboard.length === 0
+                visible: root.scoresLeaderboard().length === 0
                 width: parent.width
                 spacing: Style.space(6)
 
@@ -2010,6 +2064,7 @@ Panel {
           // ---- Stats page (per size and overall) ----
           Rectangle {
             visible: root.view === "stats"
+            opacity: root.pageT
             anchors.fill: parent
             color: Color.popups.background
             radius: Style.cornerRadius
@@ -2149,6 +2204,7 @@ Panel {
           // ---- Achievements page ----
           Rectangle {
             visible: root.view === "achievements"
+            opacity: root.pageT
             anchors.fill: parent
             color: Color.popups.background
             radius: Style.cornerRadius
@@ -2161,12 +2217,26 @@ Panel {
               anchors.margins: Style.space(12)
               spacing: Style.space(6)
 
-              Text {
-                text: "Achievements"
-                color: Color.foreground
-                font.family: Style.font.family
-                font.bold: true
-                font.pixelSize: Style.font.title
+              Row {
+                width: parent.width
+                spacing: Style.space(6)
+
+                Text {
+                  text: "Achievements"
+                  color: Color.foreground
+                  font.family: Style.font.family
+                  font.bold: true
+                  font.pixelSize: Style.font.title
+                }
+
+                Item { width: parent.width - Style.space(110) - Style.space(6); height: 1 }
+
+                Text {
+                  text: root.profile.achievements.length + " / " + Game.ACHIEVEMENTS.length + " unlocked"
+                  color: Color.muted
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.caption
+                }
               }
 
               Grid {
@@ -2223,6 +2293,7 @@ Panel {
           Rectangle {
             id: dailyPage
             visible: root.view === "daily"
+            opacity: root.pageT
             anchors.fill: parent
             color: Color.popups.background
             radius: Style.cornerRadius
@@ -2331,6 +2402,7 @@ Panel {
           // ---- Settings page ----
           Rectangle {
             visible: root.view === "settings"
+            opacity: root.pageT
             anchors.fill: parent
             color: Color.popups.background
             radius: Style.cornerRadius
@@ -2554,6 +2626,7 @@ Panel {
           // ---- Keyboard help page ----
           Rectangle {
             visible: root.view === "help"
+            opacity: root.pageT
             anchors.fill: parent
             color: Color.popups.background
             radius: Style.cornerRadius
