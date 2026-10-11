@@ -2283,6 +2283,7 @@ Panel {
                 spacing: Style.space(6)
 
                 Text {
+                  id: achievementsTitle
                   text: "Achievements"
                   color: Color.foreground
                   font.family: Style.font.family
@@ -2290,9 +2291,13 @@ Panel {
                   font.pixelSize: Style.font.title
                 }
 
-                Item { width: parent.width - Style.space(110) - Style.space(6); height: 1 }
+                Item {
+                  width: Math.max(0, parent.width - achievementsTitle.implicitWidth - achievementsCount.implicitWidth - Style.space(6))
+                  height: 1
+                }
 
                 Text {
+                  id: achievementsCount
                   text: root.profile.achievements.length + " / " + Game.ACHIEVEMENTS.length + " unlocked"
                   color: Color.muted
                   font.family: Style.font.family
