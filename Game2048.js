@@ -61,6 +61,10 @@ var NUMERALS = [
 ]
 // Tile palettes. "theme" and "mono" carry a theme token + alpha that QML maps;
 // "classic" and "contrast" carry literal colours (opt-in palettes only).
+// The visible tab ring (Unit 19b). Help is an overlay, not a tab, so it is not
+// in this list; digits 1-6 and T / Shift+T walk it and wrap around.
+var TAB_IDS = ["", "scores", "stats", "achievements", "daily", "settings"]
+
 var PALETTE_IDS = ["theme", "classic", "mono", "contrast"]
 var PALETTE_CHOICES = [
     { id: "theme", label: "Theme" },
@@ -1033,6 +1037,7 @@ function emptyProfile() {
         sizes: sizes,
         stats: emptyStatsBundle(),
         achievements: [],
+        achievementsSeen: [],
         daily: emptyDaily()
     }
 }
@@ -1083,6 +1088,7 @@ function copyProfile(profile) {
         sizes: sizes,
         stats: copyStatsBundle(profile ? profile.stats : null),
         achievements: sanitizeAchievements(profile ? profile.achievements : null),
+        achievementsSeen: sanitizeAchievementsSeen(profile ? profile.achievementsSeen : null),
         daily: copyDaily(profile ? profile.daily : null)
     }
 }
@@ -1327,6 +1333,68 @@ function evaluateAchievements(profile, game) {
     return { profile: next, unlocked: unlocked }
 }
 
+// --- tabs, seen badges and reset (Phase 5 · Unit 19b) ---------------------
+
+// Index of a page in the tab ring, or -1 when it is not a tab (the board is
+// index 0; "help" and unknown names are not tabs).
+function tabIndex(view) {
+    return TAB_IDS.indexOf(typeof view === "string" ? view : "")
+}
+
+// Next / previous tab in `step` direction, wrapping. A page that is not a tab
+// (e.g. the help overlay) steps to the first tab.
+function nextTab(view, step) {
+    var index = tabIndex(view)
+    if (index === -1) return TAB_IDS[0]
+    var dir = Number(step) < 0 ? -1 : 1
+    return TAB_IDS[(index + dir + TAB_IDS.length) % TAB_IDS.length]
+}
+
+// True while today's daily has not been started (drives the Daily tab dot).
+function dailyAvailable(profile, dateKey) {
+    return dailyStatus(profile, dateKey) === "available"
+}
+
+// Known achievement ids, in table order, from an arbitrary stored list.
+function sanitizeAchievementsSeen(raw) {
+    var out = []
+    for (var i = 0; i < ACHIEVEMENTS.length; i++) {
+        if (Array.isArray(raw) && raw.indexOf(ACHIEVEMENTS[i].id) !== -1) out.push(ACHIEVEMENTS[i].id)
+    }
+    return out
+}
+
+// Unlocked badges the player has not looked at yet (drives the Awards tab dot).
+function unseenAchievements(profile) {
+    var owned = (profile && Array.isArray(profile.achievements)) ? profile.achievements : []
+    var seen = (profile && Array.isArray(profile.achievementsSeen)) ? profile.achievementsSeen : []
+    var out = []
+    for (var i = 0; i < owned.length; i++) {
+        if (seen.indexOf(owned[i]) === -1) out.push(owned[i])
+    }
+    return out
+}
+
+// Mark every currently unlocked badge as seen (opening the Awards tab).
+function markAchievementsSeen(profile) {
+    var next = copyProfile(profile)
+    var owned = next.achievements
+    next.achievementsSeen = closeAchievements(
+        sanitizeAchievementsSeen(next.achievementsSeen).concat(owned)
+    )
+    return next
+}
+
+// Clear the aggregate and per-size stats plus every badge, keeping bests,
+// leaderboards, settings and the daily history (Settings -> Advanced).
+function resetStats(profile) {
+    var next = copyProfile(profile)
+    next.stats = emptyStatsBundle()
+    next.achievements = []
+    next.achievementsSeen = []
+    return next
+}
+
 // --- daily challenge (Phase 5 · Unit 16) ----------------------------------
 
 function emptyDaily() {
@@ -1567,6 +1635,7 @@ function profileToJson(profile) {
         sizes: sizes,
         stats: copyStatsBundle(profile.stats),
         achievements: sanitizeAchievements(profile.achievements),
+        achievementsSeen: sanitizeAchievementsSeen(profile.achievementsSeen),
         daily: dailyToJson(profile.daily)
     }
 }
@@ -1658,6 +1727,7 @@ function parseProfile(text) {
     }
     profile.stats = copyStatsBundle(data.stats)
     profile.achievements = sanitizeAchievements(data.achievements)
+    profile.achievementsSeen = sanitizeAchievementsSeen(data.achievementsSeen)
     profile.daily = copyDaily(data.daily)
     profile = healProfile(profile)
     return profile

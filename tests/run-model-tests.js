@@ -1838,3 +1838,90 @@ test("Panel.qml gates the board swipe area so it cannot cover the card buttons",
     "boardDrag must be gated by isBoardInteractive (a full-board MouseArea above the win/over card swallowed its button clicks)"
   )
 })
+
+// =========================================================================
+// Phase 5 · Unit 19b — UX redesign model helpers
+// =========================================================================
+
+test("TAB_IDS lists the six tabs in cycle order", () => {
+  same(Game.TAB_IDS, ["", "scores", "stats", "achievements", "daily", "settings"])
+})
+
+test("nextTab cycles the six tabs and wraps; help is not a tab", () => {
+  assert.equal(Game.nextTab("", 1), "scores")
+  assert.equal(Game.nextTab("settings", 1), "", "wraps forward to Board")
+  assert.equal(Game.nextTab("", -1), "settings", "wraps back from Board")
+  assert.equal(Game.nextTab("daily", -1), "achievements")
+  assert.equal(Game.nextTab("daily", 1), "settings")
+  // a non-tab page (help) steps to the start of the ring
+  assert.equal(Game.nextTab("help", 1), "")
+  assert.equal(Game.nextTab("help", -1), "")
+  // indices
+  assert.equal(Game.tabIndex("stats"), 2)
+  assert.equal(Game.tabIndex(""), 0)
+  assert.equal(Game.tabIndex("help"), -1)
+  assert.equal(Game.tabIndex("nope"), -1)
+})
+
+test("dailyAvailable is true only for an unplayed day", () => {
+  const profile = Game.emptyProfile()
+  assert.equal(Game.dailyAvailable(profile, "2026-10-11"), true)
+  const started = Game.startDaily(profile, "2026-10-11", 0)
+  assert.equal(Game.dailyAvailable(started, "2026-10-11"), false, "playing is not available")
+  const done = {
+    daily: { date: "2026-10-11", game: null, done: true, result: null, history: [] }
+  }
+  assert.equal(Game.dailyAvailable(done, "2026-10-11"), false, "done is not available")
+  assert.equal(Game.dailyAvailable(started, "2026-10-12"), true, "a new day is available again")
+})
+
+test("unseenAchievements lists unlocked-but-unseen badges and clears on mark", () => {
+  let profile = Game.emptyProfile()
+  assert.equal(Game.unseenAchievements(profile).length, 0)
+  profile.achievements = ["first512", "first1024"]
+  same(Game.unseenAchievements(profile), ["first512", "first1024"])
+  profile = Game.markAchievementsSeen(profile)
+  assert.equal(Game.unseenAchievements(profile).length, 0, "viewing clears the dot")
+  // a later unlock shows up again; the earlier seen marker is kept
+  profile.achievements = Game.closeAchievements(profile.achievements.concat(["first2048"]))
+  same(Game.unseenAchievements(profile), ["first2048"])
+  same(profile.achievementsSeen, ["first512", "first1024"], "seen keeps earlier ids")
+})
+
+test("achievementsSeen persists and an older payload defaults to empty", () => {
+  let profile = Game.emptyProfile()
+  profile.achievements = ["first512"]
+  profile.achievementsSeen = ["first512"]
+  const back = Game.parseProfile(Game.serializeProfile(profile))
+  same(back.achievementsSeen, ["first512"])
+  // an older v3 payload without the field loads with an empty seen set
+  const payload = { version: 3, activeSize: 4, settings: {}, sizes: {}, stats: {}, achievements: ["first512"] }
+  const loaded = Game.parseProfile(JSON.stringify(payload))
+  same(loaded.achievementsSeen, [])
+  // sanitize drops unknown ids and non-arrays
+  same(Game.sanitizeAchievementsSeen(["first512", "bogus", "first2048"]), ["first512", "first2048"])
+  same(Game.sanitizeAchievementsSeen("nope"), [])
+})
+
+test("resetStats clears stats and badges but keeps best, leaderboard, settings and daily", () => {
+  let profile = Game.newProfile(() => 0.5, 0)
+  profile = Game.updateSettings(profile, { palette: "contrast" })
+  profile.achievements = ["first512"]
+  profile.achievementsSeen = ["first512"]
+  profile = Game.recordStats(profile, 4, playing(square(4, 2), 4, { score: 1234, status: "over" }), 10)
+  profile.sizes["4"].best = 2864
+  profile.sizes["4"].leaderboard = [{ score: 2300, maxTile: 256, endedAt: 5 }]
+  profile.daily = { date: "2026-10-11", game: null, done: true, result: null, history: [] }
+
+  const reset = Game.resetStats(profile)
+  assert.equal(reset.stats.overall.games, 0, "stats cleared")
+  assert.equal(reset.stats.sizes["4"].games, 0, "per-size stats cleared")
+  same(reset.achievements, [])
+  same(reset.achievementsSeen, [])
+  assert.equal(reset.sizes["4"].best, 2864, "best survives")
+  assert.equal(reset.sizes["4"].leaderboard.length, 1, "leaderboard survives")
+  assert.equal(reset.settings.palette, "contrast", "settings survive")
+  assert.equal(reset.daily.done, true, "daily survives")
+  // the input profile is not mutated
+  assert.equal(profile.stats.overall.games, 1, "resetStats copies")
+})
