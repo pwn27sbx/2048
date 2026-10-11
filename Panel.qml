@@ -914,23 +914,39 @@ Panel {
     onActivated: root.undo()
   }
 
-  // A small selectable chip used by the settings page.
+  // A selectable chip used by the settings page. It takes an equal share of its
+  // row (a segmented-control look) so a full set fits on one line.
   component SettingChip: Rectangle {
     id: chip
     required property string chipLabel
     property bool active: false
     signal tapped()
-    width: chipText.implicitWidth + Style.space(12)
-    height: Style.space(18)
+    readonly property int count: {
+      var n = 0
+      var kids = parent ? parent.children : null
+      if (kids) {
+        for (var i = 0; i < kids.length; i++)
+          if (kids[i] && typeof kids[i].chipLabel === "string") n++
+      }
+      return n > 0 ? n : 1
+    }
+    readonly property real gap: parent && parent.spacing !== undefined ? parent.spacing : 0
+    width: parent && parent.width > 0 && count > 1
+      ? (parent.width - (count - 1) * gap) / count
+      : (chipText.implicitWidth + Style.space(12))
+    height: Style.space(20)
     radius: Style.cornerRadius > 0 ? Style.space(4) : 0
     color: chip.active ? Util.alpha(Color.accent, 0.22) : Util.alpha(Color.foreground, 0.06)
     Text {
       id: chipText
       anchors.centerIn: parent
+      width: parent.width - Style.space(2)
+      horizontalAlignment: Text.AlignHCenter
+      elide: Text.ElideRight
       text: chip.chipLabel
       color: chip.active ? Color.accent : Color.foreground
       font.family: Style.font.family
-      font.pixelSize: Style.font.caption
+      font.pixelSize: Style.font.caption - 1
     }
     MouseArea {
       anchors.fill: parent
@@ -939,45 +955,81 @@ Panel {
     }
   }
 
-  // One settings row: a fixed label column, a chip group and an optional hint
-  // line. Children declared here land in the chip Row.
-  component SettingRow: Column {
+  // One settings row: the label and its hint stacked on the left, the control
+  // (an equal-width chip row) on the right. Children declared here land in the
+  // chip row.
+  component SettingRow: Row {
     id: settingRow
     required property string rowLabel
     property string hint: ""
     default property alias content: chipHost.data
     width: parent ? parent.width : 0
-    spacing: Style.space(1)
+    spacing: Style.space(6)
 
-    Row {
-      spacing: Style.space(6)
+    Column {
+      width: Style.space(80)
+      spacing: Style.space(1)
 
       Text {
+        width: parent.width
         text: settingRow.rowLabel
-        width: Style.space(84)
         elide: Text.ElideRight
-        color: Color.muted
+        color: Color.foreground
         font.family: Style.font.family
         font.pixelSize: Style.font.bodySmall
       }
-
-      // A Flow so a long chip group (board sizes, palettes) wraps instead of
-      // overflowing the panel width.
-      Flow {
-        id: chipHost
-        width: settingRow.width - Style.space(84) - Style.space(6)
-        spacing: Style.space(4)
+      Text {
+        visible: settingRow.hint !== ""
+        width: parent.width
+        wrapMode: Text.WordWrap
+        text: settingRow.hint
+        color: Color.muted
+        opacity: 0.75
+        font.family: Style.font.family
+        font.pixelSize: Style.font.caption
       }
     }
 
-    Text {
-      visible: settingRow.hint !== ""
-      text: settingRow.hint
-      color: Color.muted
-      opacity: 0.8
-      leftPadding: Style.space(84) + Style.space(6)
-      font.family: Style.font.family
-      font.pixelSize: Style.font.caption
+    Row {
+      id: chipHost
+      width: settingRow.width - Style.space(80) - Style.space(6)
+      spacing: 0
+    }
+  }
+
+  // A settings section: a subtle card with its title and rows inside.
+  component SettingsSection: Rectangle {
+    id: section
+    required property string title
+    default property alias content: rowsColumn.data
+    width: parent ? parent.width : 0
+    implicitHeight: sectionColumn.implicitHeight + Style.space(12) * 2
+    height: implicitHeight
+    radius: Style.cornerRadius
+    color: Util.alpha(Color.foreground, 0.04)
+
+    Column {
+      id: sectionColumn
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.top: parent.top
+      anchors.margins: Style.space(12)
+      spacing: Style.space(8)
+
+      Text {
+        text: section.title
+        color: Color.muted
+        font.family: Style.font.family
+        font.bold: true
+        font.pixelSize: Style.font.caption
+        font.letterSpacing: 1
+      }
+
+      Column {
+        id: rowsColumn
+        width: parent.width
+        spacing: Style.space(12)
+      }
     }
   }
 
@@ -2543,12 +2595,15 @@ Panel {
             }
           }
 
-          // ---- Settings page (sectioned) ----
+          // ---- Settings page (sectioned cards) ----
           Rectangle {
             id: settingsPage
             visible: root.view === "settings"
             opacity: root.pageT
-            anchors.fill: parent
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.verticalCenter: parent.verticalCenter
+            width: contentColumn.width
+            height: parent.height
             color: Color.popups.background
             radius: Style.cornerRadius
             border.width: Math.max(1, Style.normalBorderWidth)
@@ -2558,7 +2613,7 @@ Panel {
             Flickable {
               id: settingsFlick
               anchors.fill: parent
-              anchors.margins: Style.space(10)
+              anchors.margins: Style.space(8)
               contentWidth: width
               contentHeight: settingsColumn.implicitHeight
               clip: true
@@ -2568,7 +2623,7 @@ Panel {
               Column {
                 id: settingsColumn
                 width: settingsFlick.width
-                spacing: Style.space(8)
+                spacing: Style.space(16)
 
                 Text {
                   text: "Settings"
@@ -2578,210 +2633,175 @@ Panel {
                   font.pixelSize: Style.font.title
                 }
 
-                Text {
-                  text: "GAME"
-                  color: Color.muted
-                  font.family: Style.font.family
-                  font.bold: true
-                  font.pixelSize: Style.font.caption
-                  font.letterSpacing: 1
-                }
-
-                SettingRow {
-                  rowLabel: "Board size"
-                  hint: "[ ] or the header chip"
-                  SettingChip {
-                    chipLabel: "3×3"
-                    active: root.game.size === 3 && !root.playingDaily
-                    onTapped: { keyCatcher.forceActiveFocus(); root.setSize(3) }
-                  }
-                  SettingChip {
-                    chipLabel: "4×4"
-                    active: root.game.size === 4 && !root.playingDaily
-                    onTapped: { keyCatcher.forceActiveFocus(); root.setSize(4) }
-                  }
-                  SettingChip {
-                    chipLabel: "5×5"
-                    active: root.game.size === 5 && !root.playingDaily
-                    onTapped: { keyCatcher.forceActiveFocus(); root.setSize(5) }
-                  }
-                  SettingChip {
-                    chipLabel: "6×6"
-                    active: root.game.size === 6 && !root.playingDaily
-                    onTapped: { keyCatcher.forceActiveFocus(); root.setSize(6) }
-                  }
-                  SettingChip {
-                    chipLabel: "7×7"
-                    active: root.game.size === 7 && !root.playingDaily
-                    onTapped: { keyCatcher.forceActiveFocus(); root.setSize(7) }
-                  }
-                  SettingChip {
-                    chipLabel: "8×8"
-                    active: root.game.size === 8 && !root.playingDaily
-                    onTapped: { keyCatcher.forceActiveFocus(); root.setSize(8) }
-                  }
-                }
-
-                SettingRow {
-                  rowLabel: "New game"
-                  hint: "ask before discarding"
-                  SettingChip {
-                    chipLabel: "On"
-                    active: root.gameSettings.confirmNew === true
-                    onTapped: { keyCatcher.forceActiveFocus(); root.setSetting({ confirmNew: true }) }
-                  }
-                  SettingChip {
-                    chipLabel: "Off"
-                    active: root.gameSettings.confirmNew === false
-                    onTapped: { keyCatcher.forceActiveFocus(); root.setSetting({ confirmNew: false }) }
-                  }
-                }
-
-                Item { width: 1; height: Style.space(8) }
-
-                Text {
-                  text: "LOOK"
-                  color: Color.muted
-                  font.family: Style.font.family
-                  font.bold: true
-                  font.pixelSize: Style.font.caption
-                  font.letterSpacing: 1
-                }
-
-                SettingRow {
-                  rowLabel: "Palette"
-                  hint: "tile colours"
-                  Repeater {
-                    model: Game.PALETTE_CHOICES
+                SettingsSection {
+                  title: "GAME"
+                  SettingRow {
+                    rowLabel: "Board size"
+                    hint: "[ ] or the header chip"
                     SettingChip {
-                      required property var modelData
-                      chipLabel: modelData.label
-                      active: root.gameSettings.palette === modelData.id
-                      onTapped: { keyCatcher.forceActiveFocus(); root.setSetting({ palette: modelData.id }) }
+                      chipLabel: "3×3"
+                      active: root.game.size === 3 && !root.playingDaily
+                      onTapped: { keyCatcher.forceActiveFocus(); root.setSize(3) }
+                    }
+                    SettingChip {
+                      chipLabel: "4×4"
+                      active: root.game.size === 4 && !root.playingDaily
+                      onTapped: { keyCatcher.forceActiveFocus(); root.setSize(4) }
+                    }
+                    SettingChip {
+                      chipLabel: "5×5"
+                      active: root.game.size === 5 && !root.playingDaily
+                      onTapped: { keyCatcher.forceActiveFocus(); root.setSize(5) }
+                    }
+                    SettingChip {
+                      chipLabel: "6×6"
+                      active: root.game.size === 6 && !root.playingDaily
+                      onTapped: { keyCatcher.forceActiveFocus(); root.setSize(6) }
+                    }
+                    SettingChip {
+                      chipLabel: "7×7"
+                      active: root.game.size === 7 && !root.playingDaily
+                      onTapped: { keyCatcher.forceActiveFocus(); root.setSize(7) }
+                    }
+                    SettingChip {
+                      chipLabel: "8×8"
+                      active: root.game.size === 8 && !root.playingDaily
+                      onTapped: { keyCatcher.forceActiveFocus(); root.setSize(8) }
+                    }
+                  }
+                  SettingRow {
+                    rowLabel: "New game"
+                    hint: "ask before discarding"
+                    SettingChip {
+                      chipLabel: "On"
+                      active: root.gameSettings.confirmNew === true
+                      onTapped: { keyCatcher.forceActiveFocus(); root.setSetting({ confirmNew: true }) }
+                    }
+                    SettingChip {
+                      chipLabel: "Off"
+                      active: root.gameSettings.confirmNew === false
+                      onTapped: { keyCatcher.forceActiveFocus(); root.setSetting({ confirmNew: false }) }
                     }
                   }
                 }
 
-                SettingRow {
-                  rowLabel: "Numerals"
-                  hint: "digit script"
-                  Repeater {
-                    model: Game.NUMERALS
-                    SettingChip {
-                      required property var modelData
-                      chipLabel: modelData.label
-                      active: root.gameSettings.numerals === modelData.id
-                      onTapped: { keyCatcher.forceActiveFocus(); root.setSetting({ numerals: modelData.id }) }
+                SettingsSection {
+                  title: "LOOK"
+                  SettingRow {
+                    rowLabel: "Palette"
+                    hint: "tile colours"
+                    Repeater {
+                      model: Game.PALETTE_CHOICES
+                      SettingChip {
+                        required property var modelData
+                        chipLabel: modelData.label
+                        active: root.gameSettings.palette === modelData.id
+                        onTapped: { keyCatcher.forceActiveFocus(); root.setSetting({ palette: modelData.id }) }
+                      }
+                    }
+                  }
+                  SettingRow {
+                    rowLabel: "Numerals"
+                    hint: "digit script"
+                    Repeater {
+                      model: Game.NUMERALS
+                      SettingChip {
+                        required property var modelData
+                        chipLabel: modelData.label
+                        active: root.gameSettings.numerals === modelData.id
+                        onTapped: { keyCatcher.forceActiveFocus(); root.setSetting({ numerals: modelData.id }) }
+                      }
+                    }
+                  }
+                  SettingRow {
+                    rowLabel: "Scale"
+                    hint: "90–150 %"
+                    Repeater {
+                      model: [90, 100, 110, 125, 150]
+                      SettingChip {
+                        required property var modelData
+                        chipLabel: modelData + "%"
+                        active: root.gameSettings.scale === modelData
+                        onTapped: { keyCatcher.forceActiveFocus(); root.setSetting({ scale: modelData }) }
+                      }
                     }
                   }
                 }
 
-                SettingRow {
-                  rowLabel: "Window scale"
-                  hint: "90–150 %"
-                  Repeater {
-                    model: [90, 100, 110, 125, 150]
+                SettingsSection {
+                  title: "SOUND & MOTION"
+                  SettingRow {
+                    rowLabel: "Sound"
+                    hint: "merge blip, off by default"
                     SettingChip {
-                      required property var modelData
-                      chipLabel: modelData + "%"
-                      active: root.gameSettings.scale === modelData
-                      onTapped: { keyCatcher.forceActiveFocus(); root.setSetting({ scale: modelData }) }
+                      chipLabel: "On"
+                      active: root.gameSettings.sound === true
+                      onTapped: { keyCatcher.forceActiveFocus(); root.setSetting({ sound: true }) }
+                    }
+                    SettingChip {
+                      chipLabel: "Off"
+                      active: root.gameSettings.sound === false
+                      onTapped: { keyCatcher.forceActiveFocus(); root.setSetting({ sound: false }) }
+                    }
+                  }
+                  SettingRow {
+                    rowLabel: "Motion"
+                    hint: "animation level"
+                    Repeater {
+                      model: [{ id: "full", label: "Full" }, { id: "reduced", label: "Reduced" }, { id: "off", label: "Off" }]
+                      SettingChip {
+                        required property var modelData
+                        chipLabel: modelData.label
+                        active: root.gameSettings.motion === modelData.id
+                        onTapped: { keyCatcher.forceActiveFocus(); root.setSetting({ motion: modelData.id }) }
+                      }
                     }
                   }
                 }
 
-                Item { width: 1; height: Style.space(8) }
-
-                Text {
-                  text: "SOUND & MOTION"
-                  color: Color.muted
-                  font.family: Style.font.family
-                  font.bold: true
-                  font.pixelSize: Style.font.caption
-                  font.letterSpacing: 1
-                }
-
-                SettingRow {
-                  rowLabel: "Sound"
-                  hint: "merge blip, off by default"
-                  SettingChip {
-                    chipLabel: "On"
-                    active: root.gameSettings.sound === true
-                    onTapped: { keyCatcher.forceActiveFocus(); root.setSetting({ sound: true }) }
-                  }
-                  SettingChip {
-                    chipLabel: "Off"
-                    active: root.gameSettings.sound === false
-                    onTapped: { keyCatcher.forceActiveFocus(); root.setSetting({ sound: false }) }
-                  }
-                }
-
-                SettingRow {
-                  rowLabel: "Motion"
-                  hint: "animation level"
-                  Repeater {
-                    model: [{ id: "full", label: "Full" }, { id: "reduced", label: "Reduced" }, { id: "off", label: "Off" }]
+                SettingsSection {
+                  title: "ADVANCED"
+                  SettingRow {
+                    rowLabel: "Allow undo"
+                    hint: "assisted games never rank"
                     SettingChip {
-                      required property var modelData
-                      chipLabel: modelData.label
-                      active: root.gameSettings.motion === modelData.id
-                      onTapped: { keyCatcher.forceActiveFocus(); root.setSetting({ motion: modelData.id }) }
+                      chipLabel: "On"
+                      active: root.gameSettings.allowUndo === true
+                      onTapped: { keyCatcher.forceActiveFocus(); root.setSetting({ allowUndo: true }) }
+                    }
+                    SettingChip {
+                      chipLabel: "Off"
+                      active: root.gameSettings.allowUndo === false
+                      onTapped: { keyCatcher.forceActiveFocus(); root.setSetting({ allowUndo: false }) }
                     }
                   }
-                }
-
-                Item { width: 1; height: Style.space(8) }
-
-                Text {
-                  text: "ADVANCED"
-                  color: Color.muted
-                  font.family: Style.font.family
-                  font.bold: true
-                  font.pixelSize: Style.font.caption
-                  font.letterSpacing: 1
-                }
-
-                SettingRow {
-                  rowLabel: "Allow undo"
-                  hint: "assisted games never rank"
-                  SettingChip {
-                    chipLabel: "On"
-                    active: root.gameSettings.allowUndo === true
-                    onTapped: { keyCatcher.forceActiveFocus(); root.setSetting({ allowUndo: true }) }
+                  SettingRow {
+                    rowLabel: "Undo limit"
+                    hint: "unlimited or 3 per game"
+                    SettingChip {
+                      chipLabel: "∞"
+                      active: root.gameSettings.undoLimit === "unlimited"
+                      onTapped: { keyCatcher.forceActiveFocus(); root.setSetting({ undoLimit: "unlimited" }) }
+                    }
+                    SettingChip {
+                      chipLabel: "3 / game"
+                      active: root.gameSettings.undoLimit === 3
+                      onTapped: { keyCatcher.forceActiveFocus(); root.setSetting({ undoLimit: 3 }) }
+                    }
                   }
-                  SettingChip {
-                    chipLabel: "Off"
-                    active: root.gameSettings.allowUndo === false
-                    onTapped: { keyCatcher.forceActiveFocus(); root.setSetting({ allowUndo: false }) }
-                  }
-                }
-
-                SettingRow {
-                  rowLabel: "Undo limit"
-                  hint: "unlimited or 3 per game"
-                  SettingChip {
-                    chipLabel: "∞"
-                    active: root.gameSettings.undoLimit === "unlimited"
-                    onTapped: { keyCatcher.forceActiveFocus(); root.setSetting({ undoLimit: "unlimited" }) }
-                  }
-                  SettingChip {
-                    chipLabel: "3 / game"
-                    active: root.gameSettings.undoLimit === 3
-                    onTapped: { keyCatcher.forceActiveFocus(); root.setSetting({ undoLimit: 3 }) }
-                  }
-                }
-
-                SettingRow {
-                  rowLabel: "Reset stats…"
-                  hint: "clears stats and badges, keeps bests"
-                  SettingChip {
-                    chipLabel: "Reset"
-                    onTapped: { keyCatcher.forceActiveFocus(); root.requestResetStats() }
+                  SettingRow {
+                    rowLabel: "Reset"
+                    hint: "clears stats and badges"
+                    SettingChip {
+                      chipLabel: "Reset"
+                      onTapped: { keyCatcher.forceActiveFocus(); root.requestResetStats() }
+                    }
                   }
                 }
               }
             }
           }
+
           // ---- Keyboard help overlay (?) ----
           Rectangle {
             id: helpPage
@@ -3188,53 +3208,37 @@ Panel {
         }
       }
 
-      // Board-size dropdown: a clean popup directly below the header chip,
-      // aligned to the chip's left edge. Solid background, border and a
-      // shadow-like outline, drawn above everything. The selected size shows a
-      // check and accent text; the hovered / keyboard row shows a background.
+      // Board-size dropdown: it grows out of the header chip — the same width,
+      // left edge, corner radius, border and background — so it reads as the
+      // chip opening, not a separate modal. Rows match the chip's height and
+      // font; the selected row shows a check, hover only tints the background.
       Rectangle {
         id: sizePicker
         visible: root.sizePickerOpen
         z: 71
         scale: root.uiScale
         transformOrigin: Item.TopLeft
-        width: Style.space(120)
-        height: sizePickColumn.implicitHeight + Style.space(10)
+        width: sizeChipButton.width
+        height: sizePickColumn.implicitHeight
         x: {
           var p = sizeChipButton.mapToItem(keyCatcher, 0, 0)
-          return Math.max(Style.space(2), Math.min(keyCatcher.width - width * root.uiScale - Style.space(2), p.x))
+          return Math.max(Style.space(2), Math.min(keyCatcher.width - width - Style.space(2), p.x))
         }
-        y: sizeChipButton.mapToItem(keyCatcher, 0, sizeChipButton.height + Style.space(4)).y
-        color: Color.popups.background
-        radius: Style.cornerRadius
-        border.width: Math.max(1, Style.normalBorderWidth)
-        border.color: Color.popups.border
-
-        // Shadow-like outline just outside the border.
-        Rectangle {
-          anchors.fill: parent
-          anchors.margins: -Style.space(1)
-          z: -1
-          radius: sizePicker.radius + Style.space(1)
-          color: "transparent"
-          border.width: Math.max(1, Style.normalBorderWidth)
-          border.color: Util.alpha(Color.popups.border, 0.55)
+        y: {
+          var p = sizeChipButton.mapToItem(keyCatcher, 0, sizeChipButton.height)
+          return Math.max(0, Math.min(keyCatcher.height - height, p.y))
         }
+        color: sizeChipButton.color
+        radius: sizeChipButton.radius
+        border.width: sizeChipButton.border.width
+        border.color: sizeChipButton.border.color
 
         Column {
           id: sizePickColumn
           anchors.left: parent.left
           anchors.right: parent.right
           anchors.top: parent.top
-          anchors.margins: Style.space(5)
-          spacing: Style.space(1)
-
-          Text {
-            text: "Board size"
-            color: Color.muted
-            font.family: Style.font.family
-            font.pixelSize: Style.font.caption
-          }
+          spacing: 0
 
           Repeater {
             model: Game.SUPPORTED_SIZES
@@ -3246,18 +3250,14 @@ Panel {
               readonly property bool hovered: index === root.sizePickIndex
 
               width: parent.width
-              height: Style.space(22)
-              radius: Style.cornerRadius > 0 ? Style.space(4) : 0
-              color: hovered && !selected ? Util.alpha(Color.foreground, 0.10)
-                : (hovered ? Util.alpha(Color.accent, 0.16) : "transparent")
+              height: sizeChipButton.height
+              color: hovered ? Util.alpha(Color.foreground, 0.12) : "transparent"
 
               Text {
-                anchors.left: parent.left
-                anchors.leftMargin: Style.space(6)
-                anchors.right: parent.right
-                anchors.rightMargin: Style.space(6)
-                anchors.verticalCenter: parent.verticalCenter
-                text: (selected ? "\u2713 " : "   ") + modelData + "×" + modelData
+                anchors.fill: parent
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
+                text: (selected ? "\u2713 " : "") + modelData + "×" + modelData
                 color: selected ? Color.accent : Color.foreground
                 elide: Text.ElideRight
                 font.family: Style.font.family
