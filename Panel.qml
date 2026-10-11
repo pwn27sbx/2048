@@ -428,9 +428,9 @@ Panel {
   // ink height) so the tabs read as one icon family.
   function tabs() {
     return [
-      { page: "", icon: "\uDB81\uDD77", label: "Board", dot: false },        // md-view_grid
-      { page: "scores", icon: "\uDB81\uDD99", label: "Scores", dot: false },  // md-trophy
-      { page: "stats", icon: "\uDB81\uDC6A", label: "Stats", dot: false },    // md-insights
+      { page: "", icon: "\uDB80\uDEC1", label: "Board", dot: false },        // md-grid
+      { page: "scores", icon: "\uDB81\uDD38", label: "Scores", dot: false },  // md-trophy
+      { page: "stats", icon: "\uDB80\uDD28", label: "Stats", dot: false },    // md-chart_bar
       { page: "achievements", icon: "\uDB81\uDCCE", label: "Awards",          // md-star
         dot: Game.unseenAchievements(root.profile).length > 0 },
       { page: "daily", icon: "\uDB80\uDCED", label: "Daily", dot: root.dailyReady }, // md-calendar
@@ -627,7 +627,7 @@ Panel {
   function statsRows() {
     var s = root.statsFor()
     if (!s) return []
-    return [
+    var rows = [
       ["Games", String(s.games)],
       ["Wins", String(s.wins)],
       ["Win rate", Math.round(Game.winRate(s) * 100) + "%"],
@@ -635,9 +635,12 @@ Panel {
       ["Best tile", String(s.bestTile)],
       ["Total moves", String(s.moves)],
       ["Avg score", String(Game.averageScore(s))],
-      ["Best streak", String(s.longestStreak)],
-      ["Time played", Game.formatDuration(s.timeMs)]
+      ["Best streak", String(s.longestStreak)]
     ]
+    // Only show the play time once it has been tracked: a legacy/older game
+    // carries no start time, which would otherwise read as a misleading "0:00".
+    if (s.timeMs > 0) rows.push(["Time played", Game.formatDuration(s.timeMs)])
+    return rows
   }
 
   function statsGames() {
@@ -3171,12 +3174,18 @@ Panel {
       // catcher so it can sit freely under the header chip and above the tabs
       // and the board. `[`/`]` cycle without it; ↑/↓ move, Enter picks; Esc or
       // a click anywhere outside closes it.
-      // Outside-click catcher: a click anywhere on the panel closes the picker.
-      MouseArea {
+      // Scrim + outside-click catcher: a dim behind the dropdown so the score,
+      // tab bar and title behind it recede; a click anywhere closes the picker.
+      Rectangle {
         visible: root.sizePickerOpen
         anchors.fill: parent
         z: 70
-        onClicked: root.closeSizePicker()
+        color: Util.alpha(Color.popups.background, 0.55)
+
+        MouseArea {
+          anchors.fill: parent
+          onClicked: root.closeSizePicker()
+        }
       }
 
       // Board-size dropdown: a clean popup directly below the header chip,
