@@ -6,11 +6,11 @@ The classic 2048 sliding-tile game in a keyboard-driven, theme-aware Omarchy bar
 
 ## Screenshots
 
-| Board (4×4) | Board (6×6) | Settings |
-|:---:|:---:|:---:|
-| ![4x4 board](screenshots/board-4x4.png) | ![6x6 board](screenshots/board-6x6.png) | ![Settings](screenshots/settings.png) |
-| **Stats** | **Achievements** | **Daily challenge** |
-| ![Stats](screenshots/stats.png) | ![Achievements](screenshots/achievements.png) | ![Daily](screenshots/daily.png) |
+| Board (4×4) | Board (6×6) | Size picker | Scores |
+|:---:|:---:|:---:|:---:|
+| ![4x4 board](screenshots/board-4x4.png) | ![6x6 board](screenshots/board-6x6.png) | ![Size picker](screenshots/dropdown.png) | ![Scores](screenshots/scores.png) |
+| **Stats** | **Settings** | **Achievements** | **Daily challenge** |
+| ![Stats](screenshots/stats.png) | ![Settings](screenshots/settings.png) | ![Achievements](screenshots/achievements.png) | ![Daily](screenshots/daily.png) |
 
 ## Features
 
@@ -22,7 +22,7 @@ The classic 2048 sliding-tile game in a keyboard-driven, theme-aware Omarchy bar
 - Play with the keyboard, mouse or touchpad (drag/swipe), and a full keyboard help overlay on `?`.
 
 **Progress**
-- **Stats** per size and overall: games, wins, win rate, best score, best tile, total moves, average score, longest streak, time played, and a score histogram.
+- **Stats** per size and overall: games, wins, win rate, best score, best tile, total moves, average score, longest streak, time played, a **score trend** over your recent games and a **best-tile breakdown** as labelled chips.
 - **Achievements** (a badge grid with unlock toasts): first 512/1024/2048/4096, a win without undo, a win in ≤100 moves, a 5-win streak, and a comeback from a crowded board.
 - **Daily challenge**: the same date-seeded board for everyone, one attempt a day, its own history, and share text copied to the clipboard.
 
@@ -47,7 +47,7 @@ The classic 2048 sliding-tile game in a keyboard-driven, theme-aware Omarchy bar
 | Persisted board, best, leaderboard | sometimes | ✓ |
 | Multiple board sizes (3×3 – 8×8) | sometimes | ✓ |
 | Undo | sometimes | ✓ (50 moves, assisted flag) |
-| Stats page with histogram | rare | ✓ |
+| Stats page with a score trend + tile breakdown | rare | ✓ |
 | Achievements | rare | ✓ |
 | Daily challenge (seeded) | rare | ✓ |
 | High-contrast palette | rare | ✓ |
