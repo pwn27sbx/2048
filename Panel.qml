@@ -2485,13 +2485,13 @@ Panel {
               contentWidth: width
               contentHeight: settingsColumn.implicitHeight
               clip: true
-              interactive: false
+              interactive: true
               boundsBehavior: Flickable.StopAtBounds
 
               Column {
                 id: settingsColumn
                 width: settingsFlick.width
-                spacing: Style.space(6)
+                spacing: Style.space(8)
 
                 Text {
                   text: "Settings"
@@ -2560,6 +2560,8 @@ Panel {
                   }
                 }
 
+                Item { width: 1; height: Style.space(8) }
+
                 Text {
                   text: "LOOK"
                   color: Color.muted
@@ -2611,6 +2613,8 @@ Panel {
                   }
                 }
 
+                Item { width: 1; height: Style.space(8) }
+
                 Text {
                   text: "SOUND & MOTION"
                   color: Color.muted
@@ -2648,6 +2652,8 @@ Panel {
                     }
                   }
                 }
+
+                Item { width: 1; height: Style.space(8) }
 
                 Text {
                   text: "ADVANCED"
