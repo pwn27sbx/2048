@@ -113,6 +113,17 @@ Panel {
   readonly property real uiScale: root.gameSettings.scale / 100
   // Confirm-new-game prompt is open.
   property bool confirmNew: false
+  // Reset-stats confirm prompt is open (Settings -> Advanced).
+  property bool confirmReset: false
+  // Inline board-size picker (under the header chip).
+  property bool sizePickerOpen: false
+  property int sizePickIndex: 0
+  // Motion-gated fade when a tab changes.
+  property real pageT: 1
+  // True while the score is ahead of (or just beat) the best, for the ▲ mark.
+  readonly property bool beatBest: root.bestCardCelebrate > 0 || root.game.score > root.game.best
+  // Today's daily is unplayed (drives the Board hint and the Daily tab dot).
+  readonly property bool dailyReady: Game.dailyAvailable(root.profile, Game.dailyDateKey(Date.now()))
   // Queue of achievement ids waiting to be shown as toasts.
   property var toastQueue: []
   property string toastId: ""
@@ -409,19 +420,91 @@ Panel {
     return null
   }
 
-  // Pages: board -> scores -> stats -> achievements -> daily -> board.
-  function cycleView() {
-    var pages = root.pageList
-    var index = pages.indexOf(root.view)
-    if (index === -1) index = 0
-    root.view = pages[(index + 1) % pages.length]
+  // The tab ring shown by the tab bar: page id, glyph, short label and a
+  // "something new" dot (Daily available, unseen badges). Help is not a tab.
+  function tabs() {
+    return [
+      { page: "", icon: "\u25A6", label: "Board", dot: false },
+      { page: "scores", icon: "\u265B", label: "Scores", dot: false },
+      { page: "stats", icon: "\u25A4", label: "Stats", dot: false },
+      { page: "achievements", icon: "\u2605", label: "Awards",
+        dot: Game.unseenAchievements(root.profile).length > 0 },
+      { page: "daily", icon: "\u25F7", label: "Daily", dot: root.dailyReady },
+      { page: "settings", icon: "\u2699", label: "Setup", dot: false }
+    ]
   }
 
-  // Open a page from the header tile, `t`, or the bar widget's `page` IPC.
+  // Open a page from a tab, the digit keys, `t`, or the bar widget's `page`
+  // IPC. Opening the Awards tab clears its unseen dot (persisted).
   function openPage(name) {
     if (root.pageList.indexOf(name) === -1) return
     root.view = name
+    if (name === "achievements") root.markAwardsSeen()
     if (!root.opened) root.open()
+    root.pulsePage()
+  }
+
+  // T / Shift+T walk the six-tab ring (the board is index 0).
+  function cycleTab(step) {
+    root.openPage(Game.nextTab(root.view, step))
+  }
+
+  // Mark every unlocked badge seen so the Awards dot clears after viewing.
+  function markAwardsSeen() {
+    if (Game.unseenAchievements(root.profile).length === 0) return
+    root.profile = Game.markAchievementsSeen(root.profile)
+    root.persist()
+  }
+
+  // Short motion-gated fade when the shown tab changes.
+  function pulsePage() {
+    if (!root.motionOn) {
+      root.pageT = 1
+      return
+    }
+    pageFade.duration = root.motionFull ? 120 : 60
+    root.pageT = 0
+    pageFade.restart()
+  }
+
+  // ---- inline board-size picker ----
+  function toggleSizePicker() {
+    if (root.sizePickerOpen) root.closeSizePicker()
+    else root.openSizePicker()
+  }
+
+  function openSizePicker() {
+    var index = Game.SUPPORTED_SIZES.indexOf(root.game.size)
+    root.sizePickIndex = index === -1 ? 0 : index
+    root.sizePickerOpen = true
+  }
+
+  function closeSizePicker() {
+    root.sizePickerOpen = false
+  }
+
+  function moveSizePick(step) {
+    var count = Game.SUPPORTED_SIZES.length
+    root.sizePickIndex = (root.sizePickIndex + step + count) % count
+  }
+
+  function chooseSizePick() {
+    var size = Game.SUPPORTED_SIZES[root.sizePickIndex]
+    root.closeSizePicker()
+    root.setSize(size)
+  }
+
+  // ---- reset stats (Settings -> Advanced) ----
+  function requestResetStats() {
+    root.confirmReset = true
+  }
+
+  function doResetStats() {
+    root.confirmReset = false
+    root.profile = Game.resetStats(root.profile)
+    root.persist()
+    root.toastId = ""
+    root.toastQueue = []
   }
 
   // Merge a settings patch into the profile and persist it.
@@ -497,14 +580,17 @@ Panel {
     clipboard.running = true
   }
 
-  // Footer key chips for the current page / mode.
+  // Short, per-page footer key chips (the full list lives in Help, `?`).
   function footerChips() {
-    if (root.view !== "") return [{ key: "T", label: "next page" }, { key: "Esc", label: "back" }]
+    if (root.view === "help") return [{ key: "Esc", label: "close" }]
     if (root.playingDaily)
-      return [{ key: "↑↓←→", label: "move" }, { key: "Esc", label: "leave daily" }]
+      return [{ key: "↑↓←→", label: "move" }, { key: "Esc", label: "leave" }]
+    if (root.view === "daily")
+      return [{ key: "Enter", label: "play" }, { key: "1-6", label: "pages" }, { key: "?", label: "help" }]
+    if (root.view !== "")
+      return [{ key: "1-6", label: "pages" }, { key: "T", label: "next" }, { key: "?", label: "help" }]
     return [{ key: "↑↓←→", label: "move" }, { key: "U", label: "undo" },
-            { key: "R", label: "new" }, { key: "?", label: "help" },
-            { key: "Esc", label: "close" }]
+            { key: "R", label: "new" }, { key: "?", label: "help" }]
   }
 
   // ---- stats page helpers ----
@@ -729,6 +815,17 @@ Panel {
     easing.type: Easing.OutCubic
   }
 
+  // Motion-gated fade when a tab changes (page rectangles bind to root.pageT).
+  NumberAnimation {
+    id: pageFade
+    target: root
+    property: "pageT"
+    from: 0
+    to: 1
+    duration: 120
+    easing.type: Easing.OutCubic
+  }
+
   SequentialAnimation {
     id: boardShake
     NumberAnimation { target: boardShakeTx; property: "x"; to: -Style.space(5); duration: 40; easing.type: Easing.OutQuad }
@@ -819,17 +916,29 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
-      onMoveRequested: function(dx, dy) { root.doMove(Game.directionFromDelta(dx, dy)) }
+      onMoveRequested: function(dx, dy) {
+        if (root.sizePickerOpen) {
+          root.moveSizePick(dy !== 0 ? (dy < 0 ? -1 : 1) : (dx < 0 ? -1 : 1))
+          return
+        }
+        root.doMove(Game.directionFromDelta(dx, dy))
+      }
       onActivateRequested: {
+        if (root.sizePickerOpen) { root.chooseSizePick(); return }
         if (root.confirmNew) { root.confirmNew = false; root.newGame(); return }
+        if (root.confirmReset) { root.doResetStats(); return }
+        if (root.view === "daily") { root.startDailyPlay(); return }
         if (!root.onBoard) return
         if (root.game.status === Game.STATUS_OVER) root.requestNewGame()
         else if (root.game.status === Game.STATUS_WON) root.keepGoing()
       }
       onCloseRequested: {
-        // Esc steps back: confirm -> cancel, a page -> the board, the daily ->
-        // its page, else close.
-        if (root.confirmNew) root.confirmNew = false
+        // Esc steps back: picker/confirm -> cancel, a page -> the board, the
+        // daily -> its page, else close.
+        if (root.sizePickerOpen) root.closeSizePicker()
+        else if (root.confirmNew) root.confirmNew = false
+        else if (root.confirmReset) root.confirmReset = false
+        else if (root.view === "help") root.view = ""
         else if (!root.onBoard) root.view = ""
         else if (root.playingDaily) root.leaveDaily()
         else root.close()
@@ -837,22 +946,30 @@ Panel {
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(text) {
         var key = text.toLowerCase()
-        if (root.confirmNew) return
-        if (!root.onBoard) {
-          if (key === "?") root.openPage("help")
-          else if (key === "t") root.view = ""
+        if (root.sizePickerOpen) {
+          if (key === "[") root.switchSize(-1)
+          else if (key === "]") root.switchSize(1)
           return
         }
-        if (key === "w") root.doMove("up")
-        else if (key === "a") root.doMove("left")
-        else if (key === "s") root.doMove("down")
-        else if (key === "d") root.doMove("right")
+        if (root.confirmNew || root.confirmReset) return
+        // Digits 1-6 jump straight to a tab.
+        if (text >= "1" && text <= "6") {
+          root.openPage(Game.TAB_IDS[Number(text) - 1])
+          return
+        }
+        if (key === "?") { root.openPage("help"); return }
+        if (root.view === "help") return
+        if (text === "T") { root.cycleTab(-1); return }
+        if (key === "t") { root.cycleTab(1); return }
+        if (!root.onBoard) return
+        if (key === "w" || key === "k") root.doMove("up")
+        else if (key === "a" || key === "h") root.doMove("left")
+        else if (key === "s" || key === "j") root.doMove("down")
+        else if (key === "d" || key === "l") root.doMove("right")
         else if (key === "r") root.requestNewGame()
         else if (key === "u") root.undo()
         else if (key === "[") root.switchSize(-1)
         else if (key === "]") root.switchSize(1)
-        else if (key === "t") root.cycleView()
-        else if (key === "?") root.openPage("help")
         else if (key === "c" && root.game.status === Game.STATUS_WON) root.keepGoing()
       }
 
@@ -866,306 +983,377 @@ Panel {
         scale: root.uiScale * (0.97 + 0.03 * root.entranceT)
         transformOrigin: Item.Top
 
-        // Top margin so the gain label has room above the SCORE card.
-        Item { width: 1; height: Style.space(24) }
+        // Top margin so the gain label has room above the header.
+        Item { width: 1; height: Style.space(8) }
 
-        // 1. Header: wordmark on the left; a right group of four equal
-        //    Style.space(44) tiles — SCORE, BEST, Top scores, New game — in one
-        //    Row with equal Style.space(6) gaps. Same width as the board.
+        // 1. Header: the live score is the hero; the size chip opens the inline
+        //    picker and the action group (undo / new game) sits on the right.
         Item {
           id: headerRow
           width: boardFrame.width
           anchors.horizontalCenter: parent.horizontalCenter
-          height: Style.space(44)
+          height: headerColumn.implicitHeight
 
-          // Wordmark + board-size badge. Clicking it (or pressing `[` / `]`)
-          // cycles the supported sizes; every size is its own saved game.
-          Item {
-            id: wordmark
-            anchors.left: parent.left
-            anchors.verticalCenter: parent.verticalCenter
-            width: brandColumn.implicitWidth
-            height: Style.space(44)
+          Column {
+            id: headerColumn
+            width: parent.width
+            spacing: Style.space(2)
 
-            Column {
-              id: brandColumn
-              anchors.left: parent.left
-              anchors.verticalCenter: parent.verticalCenter
-              spacing: 0
+            // Row 1: brand + size chip on the left, actions on the right.
+            Item {
+              id: headerTopRow
+              width: parent.width
+              height: Style.space(26)
 
-              Text {
-                text: "2048"
-                color: Color.accent
-                font.family: Style.font.family
-                font.bold: true
-                font.pixelSize: Style.font.title * 1.4
-              }
-
-              Text {
-                text: root.game.size + "×" + root.game.size
-                color: Color.foreground
-                opacity: 0.7
-                font.family: Style.font.family
-                font.pixelSize: Style.font.bodySmall
-              }
-            }
-
-            MouseArea {
-              id: sizeMouse
-              anchors.fill: parent
-              hoverEnabled: true
-              cursorShape: Qt.PointingHandCursor
-              onClicked: {
-                keyCatcher.forceActiveFocus()
-                root.switchSize(1)
-              }
-            }
-
-            ToolTip {
-              visible: sizeMouse.containsMouse
-              text: "Board size — click or [ ]"
-              delay: 400
-              padding: 0
-              background: BorderSurface {
-                color: Color.tooltip.background
-                borderSpec: Border.localOrSurfaceSpec("tooltip", "border", Color.tooltip.border, Color.tooltip.border, Math.max(1, Style.normalBorderWidth))
-                radius: 0
-              }
-              contentItem: Text {
-                text: "Board size — click or [ ]"
-                color: Color.tooltip.text
-                font.family: Style.font.family
-                font.pixelSize: Style.font.bodySmall
-                leftPadding: Style.spacing.controlPaddingX
-                rightPadding: Style.spacing.controlPaddingX
-                topPadding: Style.spacing.controlPaddingY
-                bottomPadding: Style.spacing.controlPaddingY
-              }
-            }
-          }
-
-          Row {
-            id: headerTiles
-            anchors.right: parent.right
-            anchors.verticalCenter: parent.verticalCenter
-            spacing: Style.space(6)
-
-            Rectangle {
-              id: scoreCard
-              width: Style.space(64)
-              height: Style.space(44)
-              color: Util.alpha(Color.foreground, 0.07)
-              radius: Style.cornerRadius > 0 ? Style.space(6) : 0
-
-              Column {
-                id: scoreColumn
-                width: parent.width
+              Row {
+                id: brandRow
+                anchors.left: parent.left
                 anchors.verticalCenter: parent.verticalCenter
-                spacing: Style.space(2)
+                spacing: Style.space(8)
 
                 Text {
-                  width: parent.width
-                  horizontalAlignment: Text.AlignHCenter
-                  text: "SCORE"
-                  color: Color.foreground
-                  opacity: 0.7
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: "2048"
+                  color: Color.accent
                   font.family: Style.font.family
-                  font.pixelSize: Style.font.bodySmall
-                  font.letterSpacing: 1
+                  font.bold: true
+                  font.pixelSize: Style.font.title * 1.2
                 }
 
+                // Size chip: a real button with a caret; opens the inline picker.
+                Rectangle {
+                  id: sizeChipButton
+                  anchors.verticalCenter: parent.verticalCenter
+                  width: sizeChipText.implicitWidth + Style.space(14)
+                  height: Style.space(22)
+                  radius: Style.cornerRadius > 0 ? Style.space(5) : 0
+                  color: (sizeChipMouse.containsMouse || root.sizePickerOpen)
+                    ? Util.alpha(Color.accent, 0.22)
+                    : Util.alpha(Color.foreground, 0.08)
+                  border.width: Math.max(1, Style.normalBorderWidth)
+                  border.color: root.sizePickerOpen ? Color.accent : Util.alpha(Color.foreground, 0.15)
+
+                  Text {
+                    id: sizeChipText
+                    anchors.centerIn: parent
+                    text: root.game.size + "×" + root.game.size + "  \u25BE"
+                    color: root.sizePickerOpen ? Color.accent : Color.foreground
+                    font.family: Style.font.family
+                    font.bold: true
+                    font.pixelSize: Style.font.bodySmall
+                  }
+
+                  MouseArea {
+                    id: sizeChipMouse
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: {
+                      keyCatcher.forceActiveFocus()
+                      root.toggleSizePicker()
+                    }
+                  }
+
+                  ToolTip {
+                    visible: sizeChipMouse.containsMouse
+                    text: "Board size — click or [ ]"
+                    delay: 400
+                    padding: 0
+                    background: BorderSurface {
+                      color: Color.tooltip.background
+                      borderSpec: Border.localOrSurfaceSpec("tooltip", "border", Color.tooltip.border, Color.tooltip.border, Math.max(1, Style.normalBorderWidth))
+                      radius: 0
+                    }
+                    contentItem: Text {
+                      text: "Board size — click or [ ]"
+                      color: Color.tooltip.text
+                      font.family: Style.font.family
+                      font.pixelSize: Style.font.bodySmall
+                      leftPadding: Style.spacing.controlPaddingX
+                      rightPadding: Style.spacing.controlPaddingX
+                      topPadding: Style.spacing.controlPaddingY
+                      bottomPadding: Style.spacing.controlPaddingY
+                    }
+                  }
+                }
+              }
+
+              // Action group: undo (dim when unavailable) and new game.
+              Row {
+                id: actionsRow
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: Style.space(6)
+
+                Rectangle {
+                  id: undoButton
+                  width: Style.space(30)
+                  height: Style.space(26)
+                  radius: Style.cornerRadius > 0 ? Style.space(6) : 0
+                  opacity: root.canUndo ? 1 : 0.4
+                  color: undoMouse.containsMouse && root.canUndo
+                    ? Util.alpha(Color.foreground, 0.14)
+                    : Util.alpha(Color.foreground, 0.07)
+
+                  Text {
+                    anchors.centerIn: parent
+                    text: "\u21BA"
+                    color: Color.foreground
+                    font.family: Style.font.family
+                    font.pixelSize: Style.font.icon
+                  }
+
+                  MouseArea {
+                    id: undoMouse
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: {
+                      keyCatcher.forceActiveFocus()
+                      root.undo()
+                    }
+                  }
+
+                  ToolTip {
+                    visible: undoMouse.containsMouse
+                    text: "Undo — U"
+                    delay: 400
+                    padding: 0
+                    background: BorderSurface {
+                      color: Color.tooltip.background
+                      borderSpec: Border.localOrSurfaceSpec("tooltip", "border", Color.tooltip.border, Color.tooltip.border, Math.max(1, Style.normalBorderWidth))
+                      radius: 0
+                    }
+                    contentItem: Text {
+                      text: "Undo — U"
+                      color: Color.tooltip.text
+                      font.family: Style.font.family
+                      font.pixelSize: Style.font.bodySmall
+                      leftPadding: Style.spacing.controlPaddingX
+                      rightPadding: Style.spacing.controlPaddingX
+                      topPadding: Style.spacing.controlPaddingY
+                      bottomPadding: Style.spacing.controlPaddingY
+                    }
+                  }
+                }
+
+                Rectangle {
+                  id: newGameButton
+                  width: Style.space(30)
+                  height: Style.space(26)
+                  radius: Style.cornerRadius > 0 ? Style.space(6) : 0
+                  color: newGameMouse.containsMouse
+                    ? Util.alpha(Color.foreground, 0.14)
+                    : Util.alpha(Color.foreground, 0.07)
+
+                  Text {
+                    anchors.centerIn: parent
+                    text: "\uFF0B"
+                    color: Color.foreground
+                    font.family: Style.font.family
+                    font.pixelSize: Style.font.icon
+                  }
+
+                  MouseArea {
+                    id: newGameMouse
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: {
+                      keyCatcher.forceActiveFocus()
+                      root.requestNewGame()
+                    }
+                  }
+
+                  ToolTip {
+                    visible: newGameMouse.containsMouse
+                    text: "New game — R"
+                    delay: 400
+                    padding: 0
+                    background: BorderSurface {
+                      color: Color.tooltip.background
+                      borderSpec: Border.localOrSurfaceSpec("tooltip", "border", Color.tooltip.border, Color.tooltip.border, Math.max(1, Style.normalBorderWidth))
+                      radius: 0
+                    }
+                    contentItem: Text {
+                      text: "New game — R"
+                      color: Color.tooltip.text
+                      font.family: Style.font.family
+                      font.pixelSize: Style.font.bodySmall
+                      leftPadding: Style.spacing.controlPaddingX
+                      rightPadding: Style.spacing.controlPaddingX
+                      topPadding: Style.spacing.controlPaddingY
+                      bottomPadding: Style.spacing.controlPaddingY
+                    }
+                  }
+                }
+              }
+            }
+
+            // Row 2: the live score is the hero; best is a small secondary.
+            Item {
+              id: heroRow
+              width: parent.width
+              height: heroColumn.implicitHeight
+
+              Column {
+                id: heroColumn
+                anchors.horizontalCenter: parent.horizontalCenter
+                spacing: 0
+
                 Text {
-                  width: parent.width
-                  horizontalAlignment: Text.AlignHCenter
+                  id: heroScoreText
+                  anchors.horizontalCenter: parent.horizontalCenter
                   text: root.numeral(root.displayScore)
                   color: Color.foreground
                   font.family: Style.font.family
-                  font.pixelSize: Style.font.title
                   font.bold: true
-                }
-              }
+                  font.pixelSize: Style.font.displayLarge
 
-              // "+N" gain: centred over the SCORE card, starts just above the
-              // card's top edge (bottom = card top - Style.space(2)) and floats
-              // further up while fading, so it never covers the card content.
-              Text {
-                id: gainText
-                anchors.horizontalCenter: parent.horizontalCenter
-                property real baseY: -height - Style.space(2)
-                y: baseY
-                z: 10
-                text: "+" + root.gainValue
-                color: Color.accent
-                font.family: Style.font.family
-                font.bold: true
-                font.pixelSize: Style.font.body
-                opacity: 0
+                  // "+N" gain: floats up above the hero score while fading.
+                  Text {
+                    id: gainText
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    property real baseY: -height - Style.space(2)
+                    y: baseY
+                    z: 10
+                    text: "+" + root.gainValue
+                    color: Color.accent
+                    font.family: Style.font.family
+                    font.bold: true
+                    font.pixelSize: Style.font.body
+                    opacity: 0
 
-                ParallelAnimation {
-                  id: gainAnim
-                  NumberAnimation {
-                    target: gainText
-                    property: "y"
-                    from: gainText.baseY
-                    to: gainText.baseY - Style.space(12)
-                    duration: root.gainMs
-                    easing.type: Easing.OutCubic
-                  }
-                  NumberAnimation {
-                    target: gainText
-                    property: "opacity"
-                    from: 1
-                    to: 0
-                    duration: root.gainMs
+                    ParallelAnimation {
+                      id: gainAnim
+                      NumberAnimation {
+                        target: gainText
+                        property: "y"
+                        from: gainText.baseY
+                        to: gainText.baseY - Style.space(12)
+                        duration: root.gainMs
+                        easing.type: Easing.OutCubic
+                      }
+                      NumberAnimation {
+                        target: gainText
+                        property: "opacity"
+                        from: 1
+                        to: 0
+                        duration: root.gainMs
+                      }
+                    }
                   }
                 }
-              }
-            }
 
-            Rectangle {
-              id: bestCard
-              width: Style.space(64)
-              height: Style.space(44)
-              color: Util.alpha(root.bestCardCelebrate > 0 ? Color.accent : Color.foreground,
-                                0.07 + 0.28 * root.bestCardCelebrate)
-              radius: Style.cornerRadius > 0 ? Style.space(6) : 0
+                Row {
+                  anchors.horizontalCenter: parent.horizontalCenter
+                  spacing: Style.space(6)
 
-              Column {
-                id: bestColumn
-                width: parent.width
-                anchors.verticalCenter: parent.verticalCenter
-                spacing: Style.space(2)
+                  Text {
+                    text: "SCORE"
+                    color: Color.foreground
+                    opacity: 0.6
+                    font.family: Style.font.family
+                    font.pixelSize: Style.font.caption
+                    font.letterSpacing: 1
+                  }
 
-                Text {
-                  width: parent.width
-                  horizontalAlignment: Text.AlignHCenter
-                  text: "BEST"
-                  color: Color.foreground
-                  opacity: 0.7
-                  font.family: Style.font.family
-                  font.pixelSize: Style.font.bodySmall
-                  font.letterSpacing: 1
-                }
+                  Text {
+                    visible: root.beatBest
+                    text: "\u25B2"
+                    color: Color.accent
+                    font.family: Style.font.family
+                    font.pixelSize: Style.font.caption
+                  }
 
-                Text {
-                  width: parent.width
-                  horizontalAlignment: Text.AlignHCenter
-                  text: root.numeral(root.game.best)
-                  color: Color.accent
-                  font.family: Style.font.family
-                  font.pixelSize: Style.font.title
-                  font.bold: true
-                }
-              }
-            }
-
-            // Top scores tile: same look as the cards, hover lightens it.
-            Rectangle {
-              id: scoresButton
-              width: Style.space(44)
-              height: Style.space(44)
-              radius: Style.cornerRadius > 0 ? Style.space(6) : 0
-              color: scoresMouse.containsMouse
-                ? Util.alpha(Color.foreground, 0.12)
-                : Util.alpha(Color.foreground, 0.07)
-
-              Text {
-                anchors.centerIn: parent
-                text: "\uF091"
-                color: Color.foreground
-                font.family: Style.font.family
-                font.pixelSize: Style.font.icon
-              }
-
-              MouseArea {
-                id: scoresMouse
-                anchors.fill: parent
-                hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
-                onClicked: {
-                  keyCatcher.forceActiveFocus()
-                  root.cycleView()
-                }
-              }
-
-              ToolTip {
-                visible: scoresMouse.containsMouse
-                text: "Pages — T"
-                delay: 400
-                padding: 0
-                background: BorderSurface {
-                  color: Color.tooltip.background
-                  borderSpec: Border.localOrSurfaceSpec("tooltip", "border", Color.tooltip.border, Color.tooltip.border, Math.max(1, Style.normalBorderWidth))
-                  radius: 0
-                }
-                contentItem: Text {
-                  text: "Pages — T"
-                  color: Color.tooltip.text
-                  font.family: Style.font.family
-                  font.pixelSize: Style.font.bodySmall
-                  leftPadding: Style.spacing.controlPaddingX
-                  rightPadding: Style.spacing.controlPaddingX
-                  topPadding: Style.spacing.controlPaddingY
-                  bottomPadding: Style.spacing.controlPaddingY
-                }
-              }
-            }
-
-            // New game tile: same look as the cards, hover lightens it.
-            Rectangle {
-              id: newGameButton
-              width: Style.space(44)
-              height: Style.space(44)
-              radius: Style.cornerRadius > 0 ? Style.space(6) : 0
-              color: newGameMouse.containsMouse
-                ? Util.alpha(Color.foreground, 0.12)
-                : Util.alpha(Color.foreground, 0.07)
-
-              Text {
-                anchors.centerIn: parent
-                text: "󰑐"
-                color: Color.foreground
-                font.family: Style.font.family
-                font.pixelSize: Style.font.icon
-              }
-
-              MouseArea {
-                id: newGameMouse
-                anchors.fill: parent
-                hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
-                onClicked: {
-                  keyCatcher.forceActiveFocus()
-                  root.requestNewGame()
-                }
-              }
-
-              ToolTip {
-                visible: newGameMouse.containsMouse
-                text: "New game"
-                delay: 400
-                padding: 0
-                background: BorderSurface {
-                  color: Color.tooltip.background
-                  borderSpec: Border.localOrSurfaceSpec("tooltip", "border", Color.tooltip.border, Color.tooltip.border, Math.max(1, Style.normalBorderWidth))
-                  radius: 0
-                }
-                contentItem: Text {
-                  text: "New game"
-                  color: Color.tooltip.text
-                  font.family: Style.font.family
-                  font.pixelSize: Style.font.bodySmall
-                  leftPadding: Style.spacing.controlPaddingX
-                  rightPadding: Style.spacing.controlPaddingX
-                  topPadding: Style.spacing.controlPaddingY
-                  bottomPadding: Style.spacing.controlPaddingY
+                  Text {
+                    text: "BEST " + root.numeral(root.game.best)
+                    color: root.beatBest ? Color.accent : Color.muted
+                    font.family: Style.font.family
+                    font.pixelSize: Style.font.caption
+                  }
                 }
               }
             }
           }
         }
 
-        Item { width: 1; height: Style.space(14) }
+        Item { width: 1; height: Style.space(8) }
+
+        // 1b. Tab bar: six visible tabs (Board · Scores · Stats · Awards ·
+        //     Daily · Setup). The active tab is tinted; a dot marks news
+        //     (Daily available, unseen badges).
+        Row {
+          id: tabBar
+          width: boardFrame.width
+          anchors.horizontalCenter: parent.horizontalCenter
+          height: Style.space(34)
+          spacing: Style.space(2)
+
+          Repeater {
+            model: root.tabs()
+
+            Rectangle {
+              id: tabItem
+              required property var modelData
+              readonly property bool active: root.view === modelData.page
+              width: (tabBar.width - Style.space(2) * 5) / 6
+              height: tabBar.height
+              radius: Style.cornerRadius > 0 ? Style.space(6) : 0
+              color: tabItem.active ? Util.alpha(Color.accent, 0.20)
+                : (tabMouse.containsMouse ? Util.alpha(Color.foreground, 0.08) : "transparent")
+              border.width: tabItem.active ? Math.max(1, Style.normalBorderWidth) : 0
+              border.color: Color.accent
+
+              Column {
+                anchors.centerIn: parent
+                spacing: Style.space(1)
+
+                Text {
+                  anchors.horizontalCenter: parent.horizontalCenter
+                  text: modelData.icon
+                  color: tabItem.active ? Color.accent : Color.foreground
+                  opacity: tabItem.active ? 1 : 0.75
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.icon
+                }
+
+                Text {
+                  anchors.horizontalCenter: parent.horizontalCenter
+                  text: modelData.label
+                  color: tabItem.active ? Color.accent : Color.muted
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.caption
+                }
+              }
+
+              // "Something new" dot.
+              Rectangle {
+                visible: modelData.dot === true
+                anchors.top: parent.top
+                anchors.right: parent.right
+                anchors.margins: Style.space(4)
+                width: Style.space(6)
+                height: Style.space(6)
+                radius: width / 2
+                color: Color.urgent
+              }
+
+              MouseArea {
+                id: tabMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: {
+                  keyCatcher.forceActiveFocus()
+                  root.openPage(modelData.page)
+                }
+              }
+            }
+          }
+        }
+
+        Item { width: 1; height: Style.space(10) }
 
         // 2. Board: a square grid of 16 cells, single (borderless) surface.
         Item {
@@ -1774,7 +1962,7 @@ Panel {
 
                   Rectangle {
                     required property var modelData
-                    width: sizeChipText.implicitWidth + Style.space(10)
+                    width: statsChipLabel.implicitWidth + Style.space(10)
                     height: Style.space(18)
                     radius: Style.cornerRadius > 0 ? Style.space(4) : 0
                     color: root.statsSize === modelData.size
@@ -1782,7 +1970,7 @@ Panel {
                       : Util.alpha(Color.foreground, 0.06)
 
                     Text {
-                      id: sizeChipText
+                      id: statsChipLabel
                       anchors.centerIn: parent
                       text: modelData.label
                       color: root.statsSize === modelData.size ? Color.accent : Color.foreground
@@ -2570,6 +2758,16 @@ Panel {
               }
             }
           }
+        }
+
+        // Board hint: today's daily is unplayed (never a modal).
+        Text {
+          anchors.horizontalCenter: parent.horizontalCenter
+          visible: root.onBoard && !root.playingDaily && root.dailyReady
+          text: "Daily ready · press 5"
+          color: Color.muted
+          font.family: Style.font.family
+          font.pixelSize: Style.font.caption
         }
 
         Item { width: 1; height: Style.space(10) }
