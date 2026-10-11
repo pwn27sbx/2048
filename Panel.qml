@@ -1376,13 +1376,15 @@ Panel {
 
         // 1b. Tab bar: six visible tabs (Board · Scores · Stats · Awards ·
         //     Daily · Setup). The active tab is tinted; a dot marks news
-        //     (Daily available, unseen badges).
+        //     (Daily available, unseen badges). 8px of horizontal padding per
+        //     tab, 4px between icon and label, and 8px of air above/below keep
+        //     it uncluttered.
         Row {
           id: tabBar
-          width: boardFrame.width
+          width: contentColumn.width
           anchors.horizontalCenter: parent.horizontalCenter
-          height: Style.space(34)
-          spacing: Style.space(2)
+          height: Style.space(40)
+          spacing: Style.space(4)
 
           Repeater {
             model: root.tabs()
@@ -1391,7 +1393,7 @@ Panel {
               id: tabItem
               required property var modelData
               readonly property bool active: root.view === modelData.page
-              width: (tabBar.width - Style.space(2) * 5) / 6
+              width: (tabBar.width - tabBar.spacing * 5) / 6
               height: tabBar.height
               radius: Style.cornerRadius > 0 ? Style.space(6) : 0
               color: tabItem.active ? Util.alpha(Color.accent, 0.20)
@@ -1401,7 +1403,8 @@ Panel {
 
               Column {
                 anchors.centerIn: parent
-                spacing: Style.space(1)
+                width: tabItem.width - Style.space(8) * 2
+                spacing: Style.space(4)
 
                 Text {
                   anchors.horizontalCenter: parent.horizontalCenter
