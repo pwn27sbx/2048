@@ -854,7 +854,7 @@ function snapshotOf(cells, score, moves) {
 // --- 20. board sizes (N×N) -----------------------------------------------
 
 test("emptyState builds an N×N board for every supported size", () => {
-  same(Game.SUPPORTED_SIZES, [3, 4, 5, 6, 8])
+  same(Game.SUPPORTED_SIZES, [3, 4, 5, 6, 7, 8])
   for (const size of Game.SUPPORTED_SIZES) {
     const state = Game.emptyState(0, size)
     assert.equal(state.version, 3)
@@ -958,8 +958,8 @@ test("startNewGame stays on its own board size", () => {
 test("parseState rejects an unsupported board size", () => {
   const base = {
     version: 3,
-    size: 7,
-    cells: square(7, 0),
+    size: 9,
+    cells: square(9, 0),
     score: 0,
     best: 0,
     moves: 0,
@@ -1139,7 +1139,7 @@ test("setActiveSize/cycleSize switch boards and wrap around", () => {
   assert.equal(Game.cycleSize(8, 1), 3, "wraps forward 8 -> 3")
   assert.equal(Game.cycleSize(3, -1), 8, "wraps back 3 -> 8")
   assert.equal(Game.cycleSize(4, 1), 5)
-  assert.equal(Game.setActiveSize(profile, 7).activeSize, 4, "unsupported size is ignored")
+  assert.equal(Game.setActiveSize(profile, 9).activeSize, 4, "unsupported size is ignored")
 })
 
 test("setGame replaces only the matching size and keeps the rest", () => {
@@ -1686,6 +1686,7 @@ test("abbreviateTile drops to 1k from 1,000 on 7x7+ boards", () => {
   assert.equal(Game.abbreviateTile(8192, 8), "8k")
   assert.equal(Game.abbreviateTile(512, 8), "512")
   assert.equal(Game.abbreviateTile(16384, 8), "16k")
+  assert.equal(Game.abbreviateTile(1024, 7), "1k", "7x7 abbreviates too")
   // smaller boards keep the 10,000 threshold
   assert.equal(Game.abbreviateTile(1024, 4), "1024")
   assert.equal(Game.abbreviateTile(8192, 6), "8192")

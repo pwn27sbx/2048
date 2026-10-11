@@ -1762,7 +1762,8 @@ Panel {
 
                 Repeater {
                   model: [{ label: "All", size: 0 }, { label: "3", size: 3 }, { label: "4", size: 4 },
-                          { label: "5", size: 5 }, { label: "6", size: 6 }, { label: "8", size: 8 }]
+                          { label: "5", size: 5 }, { label: "6", size: 6 }, { label: "7", size: 7 },
+                          { label: "8", size: 8 }]
 
                   Rectangle {
                     required property var modelData
@@ -2088,7 +2089,7 @@ Panel {
                   width: parent.width - Style.space(54) - Style.space(6)
                   spacing: Style.space(4)
                   Repeater {
-                    model: [3, 4, 5, 6, 8]
+                    model: [3, 4, 5, 6, 7, 8]
                     SettingChip {
                       required property var modelData
                       chipLabel: modelData + "×" + modelData

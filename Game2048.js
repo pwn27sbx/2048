@@ -4,7 +4,7 @@ var VERSION = 3
 var SIZE = 4
 // Board sizes the player can pick with `[` / `]` or the header badge. 4×4 is
 // the default and the size every legacy state file was written for.
-var SUPPORTED_SIZES = [3, 4, 5, 6, 8]
+var SUPPORTED_SIZES = [3, 4, 5, 6, 7, 8]
 // Undo is a ring of the last 50 pre-move snapshots; the challenge setting caps
 // how many undos a single game may use.
 var UNDO_RING = 50
