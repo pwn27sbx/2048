@@ -67,6 +67,14 @@ function same(actual, expected, message) {
   assert.deepEqual(JSON.parse(JSON.stringify(actual)), expected, message)
 }
 
+// The full normalized settings object; pass overrides for a specific case.
+function settings(over) {
+  return Object.assign({
+    allowUndo: true, undoLimit: "unlimited", motion: "full", sound: false,
+    palette: "theme", scale: 100, numerals: "western", confirmNew: false
+  }, over || {})
+}
+
 // Row-major board used for the up/down reference moves (§7 Unit 1).
 const REFERENCE_BOARD = [2, 0, 2, 4, 2, 2, 0, 4, 0, 2, 2, 8, 4, 0, 2, 8]
 
@@ -965,10 +973,10 @@ test("parseState rejects an unsupported board size", () => {
 // --- 21. undo ring --------------------------------------------------------
 
 test("defaultSettings returns the documented defaults", () => {
-  const defaults = { allowUndo: true, undoLimit: "unlimited", motion: "full", sound: false }
+  const defaults = settings()
   same(Game.defaultSettings(), defaults)
   same(Game.sanitizeSettings(null), defaults)
-  same(Game.sanitizeSettings({ allowUndo: false, undoLimit: 3 }), { allowUndo: false, undoLimit: 3, motion: "full", sound: false })
+  same(Game.sanitizeSettings({ allowUndo: false, undoLimit: 3 }), settings({ allowUndo: false, undoLimit: 3 }))
   same(Game.sanitizeSettings({ allowUndo: "yes", undoLimit: 5 }), defaults)
 })
 
@@ -1120,7 +1128,7 @@ test("emptyProfile carries every supported size and default settings", () => {
     assert.equal(game.cells.length, size * size)
     same(game.leaderboard, [])
   }
-  same(profile.settings, { allowUndo: true, undoLimit: "unlimited", motion: "full", sound: false })
+  same(profile.settings, settings())
 })
 
 test("setActiveSize/cycleSize switch boards and wrap around", () => {
@@ -1152,7 +1160,7 @@ test("serializeProfile round-trips the active game, history and settings", () =>
   const text = Game.serializeProfile(profile)
   const back = Game.parseProfile(text)
   assert.equal(back.activeSize, 4)
-  same(back.settings, { allowUndo: true, undoLimit: 3, motion: "full", sound: false })
+  same(back.settings, settings({ undoLimit: 3 }))
   const game = Game.activeGame(back)
   same(game.cells, moved.state.cells)
   assert.equal(game.best, moved.state.best)
@@ -1313,10 +1321,10 @@ test("glowTier steps at 128 (1) and 1024 (2)", () => {
 // --- 26. motion setting and sound rate ------------------------------------
 
 test("settings carry motion and sound with safe defaults", () => {
-  const defaults = { allowUndo: true, undoLimit: "unlimited", motion: "full", sound: false }
+  const defaults = settings()
   same(Game.sanitizeSettings(null), defaults)
-  same(Game.sanitizeSettings({ motion: "off", sound: true }), { allowUndo: true, undoLimit: "unlimited", motion: "off", sound: true })
-  same(Game.sanitizeSettings({ motion: "reduced" }), { allowUndo: true, undoLimit: "unlimited", motion: "reduced", sound: false })
+  same(Game.sanitizeSettings({ motion: "off", sound: true }), settings({ motion: "off", sound: true }))
+  same(Game.sanitizeSettings({ motion: "reduced" }), settings({ motion: "reduced" }))
   same(Game.sanitizeSettings({ motion: "sideways", sound: "yes" }), defaults)
 })
 
@@ -1349,7 +1357,7 @@ test("the profile round-trips combo, motion and sound", () => {
   profile = Game.setGame(profile, move.state)
   profile = Game.updateSettings(profile, { motion: "reduced", sound: true })
   const back = Game.parseProfile(Game.serializeProfile(profile))
-  same(back.settings, { allowUndo: true, undoLimit: "unlimited", motion: "reduced", sound: true })
+  same(back.settings, settings({ motion: "reduced", sound: true }))
   assert.equal(Game.activeGame(back).combo, 1)
 })
 
@@ -1363,7 +1371,7 @@ test("parseProfile fills motion, sound and combo for older payloads", () => {
     }
   }
   const profile = Game.parseProfile(JSON.stringify(payload))
-  same(profile.settings, { allowUndo: true, undoLimit: "unlimited", motion: "full", sound: false })
+  same(profile.settings, settings())
   assert.equal(profile.sizes["4"].combo, 0)
 })
 
@@ -1663,4 +1671,91 @@ test("the owner's real-shaped profile (best 2864, best tile 256) derives no badg
   const profile = Game.parseProfile(owner)
   same(profile.achievements, [], "best tile 256 is below 512")
   assert.equal(profile.sizes["4"].best, 2864, "best score still preserved")
+})
+
+// =========================================================================
+// Phase 5 · Unit 17 — settings, palettes, numerals
+// =========================================================================
+
+// --- 32. size-aware abbreviation (Unit 15 carry-forward) ------------------
+
+test("abbreviateTile drops to 1k from 1,000 on 7x7+ boards", () => {
+  assert.equal(Game.abbreviateTile(1024, 8), "1k")
+  assert.equal(Game.abbreviateTile(2048, 8), "2k")
+  assert.equal(Game.abbreviateTile(4096, 8), "4k")
+  assert.equal(Game.abbreviateTile(8192, 8), "8k")
+  assert.equal(Game.abbreviateTile(512, 8), "512")
+  assert.equal(Game.abbreviateTile(16384, 8), "16k")
+  // smaller boards keep the 10,000 threshold
+  assert.equal(Game.abbreviateTile(1024, 4), "1024")
+  assert.equal(Game.abbreviateTile(8192, 6), "8192")
+  assert.equal(Game.abbreviateTile(1024), "1024", "no size keeps the old threshold")
+  // on 8x8 the label is "1k" (2 chars), so the font is larger than the raw digits would give
+  assert.ok(Math.abs(Game.tileFontFactor(1024, 8) - 1.6 * 0.5) < 1e-9)
+  assert.ok(Game.tileFontFactor(1024, 8) > 1.05 * 0.5, "abbreviation beats the raw 4-digit factor")
+})
+
+// --- 33. numerals ---------------------------------------------------------
+
+test("NUMERALS lists five scripts with ten digits each", () => {
+  same(Game.NUMERALS.map((n) => n.id), ["western", "arabic", "devanagari", "bengali", "cjk"])
+  for (const numeral of Game.NUMERALS) {
+    assert.equal(numeral.digits.length, 10, numeral.id)
+    assert.ok(numeral.label.length > 0)
+  }
+})
+
+test("formatNumerals maps digits and passes everything else through", () => {
+  assert.equal(Game.formatNumerals(16384, "western"), "16384")
+  assert.equal(Game.formatNumerals(16384, "arabic"), "١٦٣٨٤")
+  assert.equal(Game.formatNumerals(1024, "cjk"), "一〇二四")
+  assert.equal(Game.formatNumerals(7, "devanagari"), "७")
+  assert.equal(Game.formatNumerals(3, "bengali"), "৩")
+  // abbreviation suffixes and separators survive
+  assert.equal(Game.formatNumerals("16k", "cjk"), "一六k")
+  assert.equal(Game.formatNumerals("8,412", "arabic"), "٨,٤١٢")
+  // unknown script falls back to western
+  assert.equal(Game.formatNumerals(5, "klingon"), "5")
+  assert.equal(Game.formatNumerals(null, "cjk"), "")
+})
+
+// --- 34. palettes ---------------------------------------------------------
+
+test("tilePaletteEntry resolves every palette", () => {
+  same(Game.PALETTE_IDS, ["theme", "classic", "mono", "contrast"])
+  // theme reuses the existing token table (level 4 = 16 -> accent 0.42)
+  same(Game.tilePaletteEntry("theme", 4), { base: "accent", alpha: 0.42, solid: false })
+  // mono is accent-only, ramping to solid
+  same(Game.tilePaletteEntry("mono", 0), { base: "empty", alpha: 0.07, solid: false })
+  same(Game.tilePaletteEntry("mono", 7), { base: "accent", alpha: 0.74, solid: false })
+  same(Game.tilePaletteEntry("mono", 10), { base: "accent", alpha: 1.0, solid: true })
+  // classic / contrast carry literal colours
+  same(Game.tilePaletteEntry("classic", 3), { hex: "#f2b179", text: "#f9f6f2" })
+  same(Game.tilePaletteEntry("contrast", 0), { hex: "#000000", text: "#ffffff" })
+  // clamp + fallback
+  same(Game.tilePaletteEntry("classic", 99), { hex: "#edc22e", text: "#f9f6f2" })
+  same(Game.tilePaletteEntry("bogus", 4), { base: "accent", alpha: 0.42, solid: false })
+})
+
+// --- 35. new settings -----------------------------------------------------
+
+test("settings carry palette, scale, numerals and confirmNew", () => {
+  const defaults = settings()
+  same(Game.defaultSettings(), defaults)
+  same(Game.sanitizeSettings({ palette: "classic", scale: 130, numerals: "cjk", confirmNew: true }),
+    settings({ palette: "classic", scale: 130, numerals: "cjk", confirmNew: true }))
+  // clamps and fallbacks
+  same(Game.sanitizeSettings({ scale: 200 }), settings({ scale: 100 }))
+  same(Game.sanitizeSettings({ scale: 80 }), settings({ scale: 100 }))
+  same(Game.sanitizeSettings({ scale: 90 }), settings({ scale: 90 }))
+  same(Game.sanitizeSettings({ scale: 150 }), settings({ scale: 150 }))
+  same(Game.sanitizeSettings({ palette: "nope" }), settings())
+  same(Game.sanitizeSettings({ numerals: "nope" }), settings())
+  same(Game.sanitizeSettings({ confirmNew: "yes" }), settings())
+})
+
+test("updateSettings merges and the profile round-trips the new settings", () => {
+  let profile = Game.updateSettings(Game.emptyProfile(), { palette: "contrast", scale: 120, numerals: "bengali" })
+  const back = Game.parseProfile(Game.serializeProfile(profile))
+  same(back.settings, settings({ palette: "contrast", scale: 120, numerals: "bengali" }))
 })

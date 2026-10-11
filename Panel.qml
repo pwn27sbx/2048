@@ -107,6 +107,12 @@ Panel {
   property bool playingDaily: false
   // Stats page size filter: 0 = overall, else 3/4/5/6/8.
   property int statsSize: 0
+  // Every page, in cycle order.
+  readonly property var pageList: ["", "scores", "stats", "achievements", "daily", "settings", "help"]
+  // Window scale factor (90-150 %).
+  readonly property real uiScale: root.gameSettings.scale / 100
+  // Confirm-new-game prompt is open.
+  property bool confirmNew: false
   // Queue of achievement ids waiting to be shown as toasts.
   property var toastQueue: []
   property string toastId: ""
@@ -306,6 +312,19 @@ Panel {
     root.confetti = []
   }
 
+  // R / New game honours the "confirm new game" setting.
+  function requestNewGame() {
+    if (root.playingDaily) {
+      root.leaveDaily()
+      return
+    }
+    if (root.gameSettings.confirmNew && root.game.status === Game.STATUS_PLAYING && root.game.moves > 0) {
+      root.confirmNew = true
+      return
+    }
+    root.newGame()
+  }
+
   function keepGoing() {
     var next = Game.keepGoing(root.game)
     root.profile = Game.setGame(root.profile, next)
@@ -390,7 +409,7 @@ Panel {
 
   // Pages: board -> scores -> stats -> achievements -> daily -> board.
   function cycleView() {
-    var pages = ["", "scores", "stats", "achievements", "daily"]
+    var pages = root.pageList
     var index = pages.indexOf(root.view)
     if (index === -1) index = 0
     root.view = pages[(index + 1) % pages.length]
@@ -398,10 +417,38 @@ Panel {
 
   // Open a page from the header tile, `t`, or the bar widget's `page` IPC.
   function openPage(name) {
-    var pages = ["", "scores", "stats", "achievements", "daily"]
-    if (pages.indexOf(name) === -1) return
+    if (root.pageList.indexOf(name) === -1) return
     root.view = name
     if (!root.opened) root.open()
+  }
+
+  // Merge a settings patch into the profile and persist it.
+  function setSetting(patch) {
+    root.profile = Game.updateSettings(root.profile, patch)
+    root.persist()
+  }
+
+  // Jump straight to a board size (used by the settings page).
+  function setSize(size) {
+    if (!Game.isSupportedSize(size) || size === root.game.size) return
+    if (root.sliding) root.finishSlide()
+    root.profile = Game.setActiveSize(root.profile, size)
+    root.persist()
+    root.ghosts = []
+    root.sliding = false
+    root.setScoreInstantly(Game.activeGame(root.profile).score)
+    root.celebratedThisGame = false
+    root.confetti = []
+  }
+
+  // Tile label with the active abbreviation and numerals.
+  function numeralLabel(value) {
+    return Game.formatNumerals(Game.abbreviateTile(value, root.game.size), root.gameSettings.numerals)
+  }
+
+  // Any other number (scores, best, leaderboard) in the active numerals.
+  function numeral(value) {
+    return Game.formatNumerals(value, root.gameSettings.numerals)
   }
 
   // ---- daily challenge ----
@@ -452,7 +499,7 @@ Panel {
     if (root.playingDaily)
       return [{ key: "↑↓←→", label: "move" }, { key: "Esc", label: "leave daily" }]
     return [{ key: "↑↓←→", label: "move" }, { key: "U", label: "undo" },
-            { key: "R", label: "new" }, { key: "T", label: "pages" },
+            { key: "R", label: "new" }, { key: "?", label: "help" },
             { key: "Esc", label: "close" }]
   }
 
@@ -540,18 +587,23 @@ Panel {
     readProcess.running = true
   }
 
-  // Map a tile level to its themed fill color (§3.2). No hex literals.
+  // Map a tile level to its fill for the active palette. The theme/mono
+  // palettes resolve a theme token + alpha (no hex literals); classic and
+  // contrast are opt-in literal-colour palettes.
   function tileColor(level) {
-    var style = Game.tileStyle(level)
-    var base = style.base === "accent" ? Color.accent
-      : style.base === "urgent" ? Color.urgent
+    var entry = Game.tilePaletteEntry(root.gameSettings.palette, level)
+    if (entry.hex) return entry.hex
+    var base = entry.base === "accent" ? Color.accent
+      : entry.base === "urgent" ? Color.urgent
       : Color.foreground
-    return Util.alpha(base, style.alpha)
+    return Util.alpha(base, entry.alpha)
   }
 
-  // Readable text color on a tile: composite the tile fill over the popup
-  // background, then let the WCAG contrast pick foreground or background.
+  // Readable text color on a tile: a literal palette supplies its own, else
+  // composite the fill over the popup background and let WCAG pick.
   function tileTextColor(level) {
+    var entry = Game.tilePaletteEntry(root.gameSettings.palette, level)
+    if (entry.text) return entry.text
     var fill = tileColor(level)
     var bg = Color.popups.background
     var over = Game.blend(fill.r, fill.g, fill.b, fill.a, bg.r, bg.g, bg.b)
@@ -724,6 +776,31 @@ Panel {
     onActivated: root.undo()
   }
 
+  // A small selectable chip used by the settings page.
+  component SettingChip: Rectangle {
+    id: chip
+    required property string chipLabel
+    property bool active: false
+    signal tapped()
+    width: chipText.implicitWidth + Style.space(12)
+    height: Style.space(18)
+    radius: Style.cornerRadius > 0 ? Style.space(4) : 0
+    color: chip.active ? Util.alpha(Color.accent, 0.22) : Util.alpha(Color.foreground, 0.06)
+    Text {
+      id: chipText
+      anchors.centerIn: parent
+      text: chip.chipLabel
+      color: chip.active ? Color.accent : Color.foreground
+      font.family: Style.font.family
+      font.pixelSize: Style.font.caption
+    }
+    MouseArea {
+      anchors.fill: parent
+      cursorShape: Qt.PointingHandCursor
+      onClicked: chip.tapped()
+    }
+  }
+
   KeyboardPanel {
     id: panel
     anchorItem: root.anchorItem
@@ -732,40 +809,46 @@ Panel {
     open: root.opened
     centerOnBar: true
     focusTarget: keyCatcher
-    contentWidth: panel.fittedContentWidth(Style.space(340))
-    contentHeight: panel.fittedContentHeight(contentColumn.implicitHeight)
+    contentWidth: panel.fittedContentWidth(Style.space(340) * root.uiScale)
+    contentHeight: panel.fittedContentHeight(contentColumn.implicitHeight * root.uiScale)
 
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
       onMoveRequested: function(dx, dy) { root.doMove(Game.directionFromDelta(dx, dy)) }
       onActivateRequested: {
+        if (root.confirmNew) { root.confirmNew = false; root.newGame(); return }
         if (!root.onBoard) return
-        if (root.game.status === Game.STATUS_OVER) root.newGame()
+        if (root.game.status === Game.STATUS_OVER) root.requestNewGame()
         else if (root.game.status === Game.STATUS_WON) root.keepGoing()
       }
       onCloseRequested: {
-        // Esc steps back: a page -> the board, the daily -> its page, else close.
-        if (!root.onBoard) root.view = ""
+        // Esc steps back: confirm -> cancel, a page -> the board, the daily ->
+        // its page, else close.
+        if (root.confirmNew) root.confirmNew = false
+        else if (!root.onBoard) root.view = ""
         else if (root.playingDaily) root.leaveDaily()
         else root.close()
       }
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(text) {
         var key = text.toLowerCase()
+        if (root.confirmNew) return
         if (!root.onBoard) {
-          if (key === "t") root.view = ""
+          if (key === "?") root.openPage("help")
+          else if (key === "t") root.view = ""
           return
         }
         if (key === "w") root.doMove("up")
         else if (key === "a") root.doMove("left")
         else if (key === "s") root.doMove("down")
         else if (key === "d") root.doMove("right")
-        else if (key === "r") root.newGame()
+        else if (key === "r") root.requestNewGame()
         else if (key === "u") root.undo()
         else if (key === "[") root.switchSize(-1)
         else if (key === "]") root.switchSize(1)
         else if (key === "t") root.cycleView()
+        else if (key === "?") root.openPage("help")
         else if (key === "c" && root.game.status === Game.STATUS_WON) root.keepGoing()
       }
 
@@ -773,10 +856,10 @@ Panel {
         id: contentColumn
         width: parent.width
         spacing: 0
-        // Entrance: slide down + scale up from the top, gated by motion.
+        // Window scale times the entrance (slide down + scale up), gated by motion.
         opacity: root.entranceT
-        y: (1 - root.entranceT) * -Style.space(12)
-        scale: 0.97 + 0.03 * root.entranceT
+        y: (1 - root.entranceT) * -Style.space(12) * root.uiScale
+        scale: root.uiScale * (0.97 + 0.03 * root.entranceT)
         transformOrigin: Item.Top
 
         // Top margin so the gain label has room above the SCORE card.
@@ -890,7 +973,7 @@ Panel {
                 Text {
                   width: parent.width
                   horizontalAlignment: Text.AlignHCenter
-                  text: root.displayScore
+                  text: root.numeral(root.displayScore)
                   color: Color.foreground
                   font.family: Style.font.family
                   font.pixelSize: Style.font.title
@@ -963,7 +1046,7 @@ Panel {
                 Text {
                   width: parent.width
                   horizontalAlignment: Text.AlignHCenter
-                  text: root.game.best
+                  text: root.numeral(root.game.best)
                   color: Color.accent
                   font.family: Style.font.family
                   font.pixelSize: Style.font.title
@@ -1049,7 +1132,7 @@ Panel {
                 cursorShape: Qt.PointingHandCursor
                 onClicked: {
                   keyCatcher.forceActiveFocus()
-                  root.newGame()
+                  root.requestNewGame()
                 }
               }
 
@@ -1137,7 +1220,7 @@ Panel {
                     Text {
                       anchors.centerIn: parent
                       visible: cellRoot.value > 0
-                      text: Game.abbreviateTile(cellRoot.value)
+                      text: root.numeralLabel(cellRoot.value)
                       color: root.tileTextColor(cellRoot.level)
                       font.family: Style.font.family
                       font.bold: true
@@ -1251,7 +1334,7 @@ Panel {
 
                   Text {
                     anchors.centerIn: parent
-                    text: Game.abbreviateTile(ghost.modelData.value)
+                    text: root.numeralLabel(ghost.modelData.value)
                     color: root.tileTextColor(Game.tileLevel(ghost.modelData.value))
                     font.family: Style.font.family
                     font.bold: true
@@ -1313,7 +1396,7 @@ Panel {
 
                 Text {
                   anchors.horizontalCenter: parent.horizontalCenter
-                  text: "Score " + root.game.score + " · Best tile " + Game.maxTile(root.game.cells)
+                  text: "Score " + root.numeral(root.game.score) + " · Best tile " + root.numeral(Game.maxTile(root.game.cells))
                   color: Color.foreground
                   font.family: Style.font.family
                   font.pixelSize: Style.font.body
@@ -1365,7 +1448,7 @@ Panel {
                     foreground: root.game.status === Game.STATUS_OVER ? Color.accent : Color.foreground
                     onClicked: {
                       keyCatcher.forceActiveFocus()
-                      root.newGame()
+                      root.requestNewGame()
                     }
                   }
                 }
@@ -1588,7 +1671,7 @@ Panel {
                       height: parent.height
                       horizontalAlignment: Text.AlignRight
                       verticalAlignment: Text.AlignVCenter
-                      text: scoreRowItem.modelData.score
+                      text: root.numeral(scoreRowItem.modelData.score)
                       color: scoreRowItem.rowColor
                       font.family: Style.font.family
                       font.pixelSize: Style.font.bodySmall
@@ -1601,7 +1684,7 @@ Panel {
                       height: parent.height
                       horizontalAlignment: Text.AlignRight
                       verticalAlignment: Text.AlignVCenter
-                      text: scoreRowItem.modelData.maxTile
+                      text: root.numeral(scoreRowItem.modelData.maxTile)
                       color: scoreRowItem.rowColor
                       font.family: Style.font.family
                       font.pixelSize: Style.font.bodySmall
@@ -1966,6 +2049,341 @@ Panel {
                   color: Color.foreground
                   font.family: Style.font.family
                   font.pixelSize: Style.font.bodySmall
+                }
+              }
+            }
+          }
+
+          // ---- Settings page ----
+          Rectangle {
+            visible: root.view === "settings"
+            anchors.fill: parent
+            color: Color.popups.background
+            radius: Style.cornerRadius
+            border.width: Math.max(1, Style.normalBorderWidth)
+            border.color: Color.popups.border
+            clip: true
+
+            Column {
+              anchors.fill: parent
+              anchors.margins: Style.space(10)
+              spacing: Style.space(6)
+
+              Text {
+                text: "Settings"
+                color: Color.foreground
+                font.family: Style.font.family
+                font.bold: true
+                font.pixelSize: Style.font.title
+              }
+
+              Row {
+                width: parent.width
+                spacing: Style.space(6)
+                Text {
+                  text: "Board"; width: Style.space(54); color: Color.muted
+                  font.family: Style.font.family; font.pixelSize: Style.font.bodySmall
+                }
+                Row {
+                  width: parent.width - Style.space(54) - Style.space(6)
+                  spacing: Style.space(4)
+                  Repeater {
+                    model: [3, 4, 5, 6, 8]
+                    SettingChip {
+                      required property var modelData
+                      chipLabel: modelData + "×" + modelData
+                      active: root.game.size === modelData && !root.playingDaily
+                      onTapped: { keyCatcher.forceActiveFocus(); root.setSize(modelData) }
+                    }
+                  }
+                }
+              }
+
+              Row {
+                width: parent.width
+                spacing: Style.space(6)
+                Text {
+                  text: "Palette"; width: Style.space(54); color: Color.muted
+                  font.family: Style.font.family; font.pixelSize: Style.font.bodySmall
+                }
+                Row {
+                  width: parent.width - Style.space(54) - Style.space(6)
+                  spacing: Style.space(4)
+                  Repeater {
+                    model: Game.PALETTE_CHOICES
+                    SettingChip {
+                      required property var modelData
+                      chipLabel: modelData.label
+                      active: root.gameSettings.palette === modelData.id
+                      onTapped: { keyCatcher.forceActiveFocus(); root.setSetting({ palette: modelData.id }) }
+                    }
+                  }
+                }
+              }
+
+              Row {
+                width: parent.width
+                spacing: Style.space(6)
+                Text {
+                  text: "Motion"; width: Style.space(54); color: Color.muted
+                  font.family: Style.font.family; font.pixelSize: Style.font.bodySmall
+                }
+                Row {
+                  width: parent.width - Style.space(54) - Style.space(6)
+                  spacing: Style.space(4)
+                  Repeater {
+                    model: [{ id: "full", label: "Full" }, { id: "reduced", label: "Reduced" }, { id: "off", label: "Off" }]
+                    SettingChip {
+                      required property var modelData
+                      chipLabel: modelData.label
+                      active: root.gameSettings.motion === modelData.id
+                      onTapped: { keyCatcher.forceActiveFocus(); root.setSetting({ motion: modelData.id }) }
+                    }
+                  }
+                }
+              }
+
+              Row {
+                width: parent.width
+                spacing: Style.space(6)
+                Text {
+                  text: "Numerals"; width: Style.space(54); color: Color.muted
+                  font.family: Style.font.family; font.pixelSize: Style.font.bodySmall
+                }
+                Row {
+                  width: parent.width - Style.space(54) - Style.space(6)
+                  spacing: Style.space(4)
+                  Repeater {
+                    model: Game.NUMERALS
+                    SettingChip {
+                      required property var modelData
+                      chipLabel: modelData.label
+                      active: root.gameSettings.numerals === modelData.id
+                      onTapped: { keyCatcher.forceActiveFocus(); root.setSetting({ numerals: modelData.id }) }
+                    }
+                  }
+                }
+              }
+
+              Row {
+                width: parent.width
+                spacing: Style.space(6)
+                Text {
+                  text: "Undo"; width: Style.space(54); color: Color.muted
+                  font.family: Style.font.family; font.pixelSize: Style.font.bodySmall
+                }
+                Row {
+                  width: parent.width - Style.space(54) - Style.space(6)
+                  spacing: Style.space(4)
+                  Repeater {
+                    model: [{ v: true, label: "On" }, { v: false, label: "Off" }]
+                    SettingChip {
+                      required property var modelData
+                      chipLabel: modelData.label
+                      active: root.gameSettings.allowUndo === modelData.v
+                      onTapped: { keyCatcher.forceActiveFocus(); root.setSetting({ allowUndo: modelData.v }) }
+                    }
+                  }
+                }
+              }
+
+              Row {
+                width: parent.width
+                spacing: Style.space(6)
+                Text {
+                  text: "Limit"; width: Style.space(54); color: Color.muted
+                  font.family: Style.font.family; font.pixelSize: Style.font.bodySmall
+                }
+                Row {
+                  width: parent.width - Style.space(54) - Style.space(6)
+                  spacing: Style.space(4)
+                  Repeater {
+                    model: [{ v: "unlimited", label: "∞" }, { v: 3, label: "3 / game" }]
+                    SettingChip {
+                      required property var modelData
+                      chipLabel: modelData.label
+                      active: root.gameSettings.undoLimit === modelData.v
+                      onTapped: { keyCatcher.forceActiveFocus(); root.setSetting({ undoLimit: modelData.v }) }
+                    }
+                  }
+                }
+              }
+
+              Row {
+                width: parent.width
+                spacing: Style.space(6)
+                Text {
+                  text: "Sound"; width: Style.space(54); color: Color.muted
+                  font.family: Style.font.family; font.pixelSize: Style.font.bodySmall
+                }
+                Row {
+                  width: parent.width - Style.space(54) - Style.space(6)
+                  spacing: Style.space(4)
+                  Repeater {
+                    model: [{ v: true, label: "On" }, { v: false, label: "Off" }]
+                    SettingChip {
+                      required property var modelData
+                      chipLabel: modelData.label
+                      active: root.gameSettings.sound === modelData.v
+                      onTapped: { keyCatcher.forceActiveFocus(); root.setSetting({ sound: modelData.v }) }
+                    }
+                  }
+                }
+              }
+
+              Row {
+                width: parent.width
+                spacing: Style.space(6)
+                Text {
+                  text: "Scale"; width: Style.space(54); color: Color.muted
+                  font.family: Style.font.family; font.pixelSize: Style.font.bodySmall
+                }
+                Row {
+                  width: parent.width - Style.space(54) - Style.space(6)
+                  spacing: Style.space(4)
+                  Repeater {
+                    model: [90, 100, 110, 125, 150]
+                    SettingChip {
+                      required property var modelData
+                      chipLabel: modelData + "%"
+                      active: root.gameSettings.scale === modelData
+                      onTapped: { keyCatcher.forceActiveFocus(); root.setSetting({ scale: modelData }) }
+                    }
+                  }
+                }
+              }
+
+              Row {
+                width: parent.width
+                spacing: Style.space(6)
+                Text {
+                  text: "Confirm"; width: Style.space(54); color: Color.muted
+                  font.family: Style.font.family; font.pixelSize: Style.font.bodySmall
+                }
+                Row {
+                  width: parent.width - Style.space(54) - Style.space(6)
+                  spacing: Style.space(4)
+                  Repeater {
+                    model: [{ v: true, label: "On" }, { v: false, label: "Off" }]
+                    SettingChip {
+                      required property var modelData
+                      chipLabel: modelData.label
+                      active: root.gameSettings.confirmNew === modelData.v
+                      onTapped: { keyCatcher.forceActiveFocus(); root.setSetting({ confirmNew: modelData.v }) }
+                    }
+                  }
+                }
+              }
+            }
+          }
+
+          // ---- Keyboard help page ----
+          Rectangle {
+            visible: root.view === "help"
+            anchors.fill: parent
+            color: Color.popups.background
+            radius: Style.cornerRadius
+            border.width: Math.max(1, Style.normalBorderWidth)
+            border.color: Color.popups.border
+            clip: true
+
+            Column {
+              anchors.fill: parent
+              anchors.margins: Style.space(12)
+              spacing: Style.space(4)
+
+              Text {
+                text: "Keyboard"
+                color: Color.foreground
+                font.family: Style.font.family
+                font.bold: true
+                font.pixelSize: Style.font.title
+              }
+
+              Repeater {
+                model: [
+                  ["← ↑ → ↓ / H J K L", "Move"],
+                  ["W A S D", "Move"],
+                  ["Drag / swipe", "Move"],
+                  ["U / Ctrl+Z", "Undo"],
+                  ["R", "New game"],
+                  ["[ / ]", "Board size"],
+                  ["T", "Next page"],
+                  ["Enter / Space", "Keep going / new game"],
+                  ["Esc", "Back / close"],
+                  ["?", "This help"],
+                  ["Tab", "Next bar panel"]
+                ]
+                Row {
+                  required property var modelData
+                  spacing: Style.space(6)
+                  Text {
+                    text: modelData[0]; width: Style.space(126); color: Color.accent
+                    font.family: Style.font.family; font.pixelSize: Style.font.caption
+                  }
+                  Text {
+                    text: modelData[1]; color: Color.foreground
+                    font.family: Style.font.family; font.pixelSize: Style.font.caption
+                  }
+                }
+              }
+            }
+          }
+
+          // Confirm-new-game prompt (setting "Confirm").
+          Rectangle {
+            anchors.fill: parent
+            visible: root.confirmNew
+            color: Util.alpha(Color.popups.background, 0.9)
+            radius: Style.cornerRadius
+            border.width: Math.max(1, Style.normalBorderWidth)
+            border.color: Color.popups.border
+            z: 50
+
+            Rectangle {
+              anchors.centerIn: parent
+              color: Color.popups.background
+              radius: Style.cornerRadius
+              border.width: Math.max(1, Style.normalBorderWidth)
+              border.color: Color.popups.border
+              implicitWidth: confirmColumn.implicitWidth + Style.space(12) * 2
+              implicitHeight: confirmColumn.implicitHeight + Style.space(12) * 2
+
+              Column {
+                id: confirmColumn
+                anchors.centerIn: parent
+                spacing: Style.space(8)
+
+                Text {
+                  anchors.horizontalCenter: parent.horizontalCenter
+                  text: "Start a new game?"
+                  color: Color.foreground
+                  font.family: Style.font.family
+                  font.bold: true
+                  font.pixelSize: Style.font.title
+                }
+
+                Row {
+                  anchors.horizontalCenter: parent.horizontalCenter
+                  spacing: Style.space(8)
+
+                  Button {
+                    text: "New game"
+                    foreground: Color.accent
+                    onClicked: {
+                      keyCatcher.forceActiveFocus()
+                      root.confirmNew = false
+                      root.newGame()
+                    }
+                  }
+                  Button {
+                    text: "Cancel"
+                    foreground: Color.foreground
+                    onClicked: {
+                      keyCatcher.forceActiveFocus()
+                      root.confirmNew = false
+                    }
+                  }
                 }
               }
             }

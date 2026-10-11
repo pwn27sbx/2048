@@ -48,6 +48,55 @@ var ACHIEVEMENTS = [
 // a stored badge set is always closed this way.
 var TILE_ACHIEVEMENTS = ["first512", "first1024", "first2048", "first4096"]
 var WIN_ACHIEVEMENTS = ["win_no_undo", "win_swift", "comeback", "streak5"]
+// Digits above 10,000 shrink earlier on the big boards (7x7+): 1024 -> "1k".
+var ABBREVIATE_FROM_BIG_BOARD = 1000
+// Numerals (data only): the label digit set for each script. Digits not in the
+// set (abbreviation suffixes, separators) pass through unchanged.
+var NUMERALS = [
+    { id: "western", label: "123", digits: "0123456789" },
+    { id: "arabic", label: "١٢٣", digits: "٠١٢٣٤٥٦٧٨٩" },
+    { id: "devanagari", label: "१२३", digits: "०१२३४५६७८९" },
+    { id: "bengali", label: "১২৩", digits: "০১২৩৪৫৬৭৮৯" },
+    { id: "cjk", label: "一二三", digits: "〇一二三四五六七八九" }
+]
+// Tile palettes. "theme" and "mono" carry a theme token + alpha that QML maps;
+// "classic" and "contrast" carry literal colours (opt-in palettes only).
+var PALETTE_IDS = ["theme", "classic", "mono", "contrast"]
+var PALETTE_CHOICES = [
+    { id: "theme", label: "Theme" },
+    { id: "classic", label: "Classic" },
+    { id: "mono", label: "Mono" },
+    { id: "contrast", label: "Contrast" }
+]
+var MONO_ALPHAS = [0.07, 0.10, 0.16, 0.24, 0.34, 0.46, 0.60, 0.74, 0.86, 0.94, 1.0, 1.0]
+var CLASSIC_TILE_COLORS = [
+    { hex: "#cdc1b4", text: "#776e65" },
+    { hex: "#eee4da", text: "#776e65" },
+    { hex: "#ede0c8", text: "#776e65" },
+    { hex: "#f2b179", text: "#f9f6f2" },
+    { hex: "#f59563", text: "#f9f6f2" },
+    { hex: "#f67c5f", text: "#f9f6f2" },
+    { hex: "#f65e3b", text: "#f9f6f2" },
+    { hex: "#edcf72", text: "#f9f6f2" },
+    { hex: "#edcc61", text: "#f9f6f2" },
+    { hex: "#edc850", text: "#f9f6f2" },
+    { hex: "#edc53f", text: "#f9f6f2" },
+    { hex: "#edc22e", text: "#f9f6f2" }
+]
+var CONTRAST_TILE_COLORS = [
+    { hex: "#000000", text: "#ffffff" },
+    { hex: "#ffffff", text: "#000000" },
+    { hex: "#ffffff", text: "#000000" },
+    { hex: "#000000", text: "#ffffff" },
+    { hex: "#000000", text: "#ffffff" },
+    { hex: "#000000", text: "#ffffff" },
+    { hex: "#000000", text: "#ffffff" },
+    { hex: "#ffd400", text: "#000000" },
+    { hex: "#ffd400", text: "#000000" },
+    { hex: "#ffd400", text: "#000000" },
+    { hex: "#ff7a00", text: "#000000" },
+    { hex: "#ff2020", text: "#ffffff" }
+]
 var WIN_VALUE = 2048
 var MAX_STATE_BYTES = 65536
 // Keep profile writes a little under the helper's hard 64 KiB cap.
@@ -494,12 +543,14 @@ function tileLevel(value) {
     return level
 }
 
-// Short label for a tile: plain below 10,000, then "16k" / "131k".
-function abbreviateTile(value) {
+// Short label for a tile: plain below the threshold, then "1k" / "16k" / "131k".
+// On a 7x7+ board the threshold drops to 1,000 so the 4-digit tiles shrink too.
+function abbreviateTile(value, size) {
     var n = Number(value)
     if (!isFinite(n) || n < 0) n = 0
     n = Math.floor(n)
-    if (n < ABBREVIATE_FROM) return String(n)
+    var from = (isSupportedSize(size) && Number(size) >= 7) ? ABBREVIATE_FROM_BIG_BOARD : ABBREVIATE_FROM
+    if (n < from) return String(n)
     if (n < 1000000) return Math.floor(n / 1000) + "k"
     return Math.floor(n / 1000000) + "M"
 }
@@ -509,9 +560,55 @@ function abbreviateTile(value) {
 // QML multiplies Style.font.title by this.
 function tileFontFactor(value, size) {
     var n = isSupportedSize(size) ? Number(size) : SIZE
-    var digits = abbreviateTile(value).length
+    var digits = abbreviateTile(value, n).length
     var byDigits = digits <= 2 ? 1.6 : digits === 3 ? 1.3 : digits === 4 ? 1.05 : 0.85
     return byDigits * (4 / n)
+}
+
+// --- numerals (Phase 5 · Unit 17) -----------------------------------------
+
+function numeralId(id) {
+    for (var i = 0; i < NUMERALS.length; i++) {
+        if (NUMERALS[i].id === id) return id
+    }
+    return "western"
+}
+
+// Map the ASCII digits of any value/text to the chosen numeral script.
+function formatNumerals(value, numerals) {
+    var text = (value === null || value === undefined) ? "" : String(value)
+    var digits = NUMERALS[0].digits
+    var wanted = numeralId(numerals)
+    for (var i = 0; i < NUMERALS.length; i++) {
+        if (NUMERALS[i].id === wanted) digits = NUMERALS[i].digits
+    }
+    if (digits === "0123456789") return text
+    var out = ""
+    for (i = 0; i < text.length; i++) {
+        var code = text.charCodeAt(i) - 48
+        out += (code >= 0 && code <= 9) ? digits.charAt(code) : text.charAt(i)
+    }
+    return out
+}
+
+// --- palettes (Phase 5 · Unit 17) -----------------------------------------
+
+function isPaletteId(id) {
+    return PALETTE_IDS.indexOf(id) !== -1
+}
+
+// Resolve one tile cell (level 0 = empty) for a palette. Theme/mono entries
+// carry a theme token + alpha (QML maps them); classic/contrast carry a literal
+// background and text colour.
+function tilePaletteEntry(palette, level) {
+    var l = clampLevel(level)
+    var id = isPaletteId(palette) ? palette : "theme"
+    if (id === "theme") return tileStyle(l)
+    if (id === "mono") {
+        return { base: (l === 0 ? "empty" : "accent"), alpha: MONO_ALPHAS[l], solid: l >= 10 }
+    }
+    if (id === "classic") return CLASSIC_TILE_COLORS[l]
+    return CONTRAST_TILE_COLORS[l]
 }
 
 // Glow-ring tier for a tile level: 0 none, 1 at 128+, 2 at 1024+.
@@ -849,7 +946,10 @@ function startNewGame(state, rng, now) {
 // --- settings, profiles and undo (Phase 5 · Unit 14) ----------------------
 
 function defaultSettings() {
-    return { allowUndo: true, undoLimit: UNDO_UNLIMITED, motion: MOTION_FULL, sound: false }
+    return {
+        allowUndo: true, undoLimit: UNDO_UNLIMITED, motion: MOTION_FULL, sound: false,
+        palette: "theme", scale: 100, numerals: "western", confirmNew: false
+    }
 }
 
 // Clamp arbitrary input to the known settings shape. A missing Allow undo is
@@ -863,11 +963,17 @@ function sanitizeSettings(raw) {
     var motion = (source.motion === MOTION_FULL || source.motion === MOTION_REDUCED || source.motion === MOTION_OFF)
         ? source.motion
         : MOTION_FULL
+    var scale = normalizeCount(source.scale)
+    if (scale < 90 || scale > 150) scale = 100
     return {
         allowUndo: source.allowUndo !== false,
         undoLimit: limit,
         motion: motion,
-        sound: source.sound === true
+        sound: source.sound === true,
+        palette: isPaletteId(source.palette) ? source.palette : "theme",
+        scale: scale,
+        numerals: numeralId(source.numerals),
+        confirmNew: source.confirmNew === true
     }
 }
 
@@ -878,7 +984,11 @@ function mergeSettings(current, patch) {
         allowUndo: "allowUndo" in source ? source.allowUndo : base.allowUndo,
         undoLimit: "undoLimit" in source ? source.undoLimit : base.undoLimit,
         motion: "motion" in source ? source.motion : base.motion,
-        sound: "sound" in source ? source.sound : base.sound
+        sound: "sound" in source ? source.sound : base.sound,
+        palette: "palette" in source ? source.palette : base.palette,
+        scale: "scale" in source ? source.scale : base.scale,
+        numerals: "numerals" in source ? source.numerals : base.numerals,
+        confirmNew: "confirmNew" in source ? source.confirmNew : base.confirmNew
     })
 }
 
