@@ -1760,3 +1760,56 @@ test("updateSettings merges and the profile round-trips the new settings", () =>
   const back = Game.parseProfile(Game.serializeProfile(profile))
   same(back.settings, settings({ palette: "contrast", scale: 120, numerals: "bengali" }))
 })
+
+// --- 36. boards never start with no tiles (2.0.0 bugfix) ------------------
+
+test("newProfile spawns two tiles on every size", () => {
+  const profile = Game.newProfile(() => 0.5, 0)
+  for (const size of Game.SUPPORTED_SIZES) {
+    assert.equal(
+      profile.sizes[String(size)].cells.filter((v) => v !== 0).length,
+      2,
+      `size ${size} starts with two tiles`
+    )
+  }
+})
+
+test("a migrated v2 profile spawns a board on every other size", () => {
+  const v2 = JSON.stringify({
+    version: 2, size: 4, cells: [0, 0, 0, 2, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    score: 0, best: 2864, moves: 0, status: "playing", keepPlaying: false,
+    startedAt: 1, recorded: false, lastRank: 0, lastRecordedAt: 0, leaderboard: []
+  })
+  const profile = Game.parseProfile(v2)
+  assert.equal(profile.sizes["4"].best, 2864, "the legacy 4x4 is preserved")
+  for (const size of Game.SUPPORTED_SIZES) {
+    assert.equal(
+      profile.sizes[String(size)].cells.filter((v) => v !== 0).length,
+      2,
+      `size ${size} has movable tiles after migration`
+    )
+  }
+})
+
+test("an empty playing board self-heals on load and via healProfile", () => {
+  // a v3 profile whose 5x5 is playing but has no tiles (the 2.0.0 owner file)
+  const empty5 = { version: 3, size: 5, cells: square(5, 0), score: 0, best: 0, moves: 0, status: "playing", keepPlaying: false }
+  const payload = { version: 3, activeSize: 5, settings: { allowUndo: true, undoLimit: "unlimited" }, sizes: { "5": empty5 } }
+  const loaded = Game.parseProfile(JSON.stringify(payload))
+  assert.equal(loaded.sizes["5"].cells.filter((v) => v !== 0).length, 2, "healed on load")
+  const movable = Game.move(loaded.sizes["5"], "left", () => 0.5, 0)
+  assert.ok(movable.moved || !movable.moved, "calling move never throws")
+  // and directly
+  const healed = Game.healProfile(Game.emptyProfile(), () => 0.5, 0)
+  for (const size of Game.SUPPORTED_SIZES) {
+    assert.equal(healed.sizes[String(size)].cells.filter((v) => v !== 0).length, 2, `size ${size} healed`)
+  }
+})
+
+test("a finished board is not healed", () => {
+  const profile = Game.emptyProfile()
+  profile.sizes["4"] = playing(square(4, 0), 4, { status: "over", score: 100 })
+  const healed = Game.healProfile(profile, () => 0.5, 0)
+  same(healed.sizes["4"].cells, square(4, 0), "an over board is left alone")
+  assert.equal(healed.sizes["3"].cells.filter((v) => v !== 0).length, 2, "the empty playing 3x3 is healed")
+})

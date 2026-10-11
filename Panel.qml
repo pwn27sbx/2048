@@ -29,7 +29,7 @@ Panel {
   // The profile carries every board size (its own game, best and leaderboard)
   // plus the shared settings. `game` is the active board, derived from it, so
   // the rendering code keeps reading root.game as before.
-  property var profile: Game.emptyProfile()
+  property var profile: Game.newProfile(Math.random, Date.now())
   // While a daily attempt is in progress the board is that seeded game; every
   // other moment it is the active size's game.
   readonly property var dailyGameState: Game.dailyGame(root.profile)
@@ -353,6 +353,8 @@ Panel {
     var nextSize = Game.cycleSize(root.game.size, step)
     if (nextSize === root.game.size) return
     root.profile = Game.setActiveSize(root.profile, nextSize)
+    // Self-heal any empty playing board before it is shown (pre-fix files).
+    root.profile = Game.healProfile(root.profile, Math.random)
     root.persist()
     root.ghosts = []
     root.sliding = false
@@ -433,6 +435,8 @@ Panel {
     if (!Game.isSupportedSize(size) || size === root.game.size) return
     if (root.sliding) root.finishSlide()
     root.profile = Game.setActiveSize(root.profile, size)
+    // Self-heal any empty playing board before it is shown (pre-fix files).
+    root.profile = Game.healProfile(root.profile, Math.random)
     root.persist()
     root.ghosts = []
     root.sliding = false
@@ -547,7 +551,7 @@ Panel {
     // re-applying would cut the score count-up and re-arm the celebration.
     if (text === root.lastStateText) return
     var parsed = Game.parseProfile(text)
-    var next = parsed ? parsed : Game.emptyProfile()
+    var next = parsed ? parsed : Game.newProfile(Math.random, Date.now())
     var nextGame = Game.activeGame(next)
     // Only a genuinely different game re-arms the once-per-game celebration;
     // another monitor's move in the same game keeps it spent.

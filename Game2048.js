@@ -1001,8 +1001,15 @@ function motionFull(settings) {
     return sanitizeSettings(settings).motion === MOTION_FULL
 }
 
+// A fresh, spawned board for one size (two tiles), ready to play.
+function newGameForSize(size, rng, now) {
+    var n = isSupportedSize(size) ? Number(size) : SIZE
+    return newGame(0, typeof rng === "function" ? rng : Math.random, normalizeMs(now), [], n)
+}
+
 // Every supported size gets its own board, best and leaderboard. Settings are
-// shared by the whole profile.
+// shared by the whole profile. The size boards start EMPTY here (a template);
+// `newProfile` spawns the first tiles and `healProfile` fixes any empty board.
 function emptyProfile() {
     var sizes = {}
     for (var i = 0; i < SUPPORTED_SIZES.length; i++) {
@@ -1020,13 +1027,44 @@ function emptyProfile() {
     }
 }
 
+// A playable profile: every size starts with a fresh game (two tiles).
+function newProfile(rng, now) {
+    var next = emptyProfile()
+    for (var i = 0; i < SUPPORTED_SIZES.length; i++) {
+        var size = SUPPORTED_SIZES[i]
+        next.sizes[String(size)] = newGameForSize(size, rng, now)
+    }
+    return next
+}
+
+// Spawn two tiles onto a "playing" board that has none — the empty default the
+// old profile builders wrote, or a corrupt/legacy file — keeping its best,
+// leaderboard and startedAt. A finished (won/over) board, or one with tiles, is
+// returned unchanged.
+function healGame(game, rng) {
+    if (!game || game.status !== STATUS_PLAYING || occupiedCount(game.cells) > 0) {
+        return game
+    }
+    var roll = typeof rng === "function" ? rng : Math.random
+    return spawn(spawn(game, roll), roll)
+}
+
+function healProfile(profile, rng) {
+    var next = copyProfile(profile)
+    for (var i = 0; i < SUPPORTED_SIZES.length; i++) {
+        var key = String(SUPPORTED_SIZES[i])
+        next.sizes[key] = healGame(next.sizes[key], rng)
+    }
+    return next
+}
+
 function copyProfile(profile) {
     var sizes = {}
     for (var i = 0; i < SUPPORTED_SIZES.length; i++) {
         var size = SUPPORTED_SIZES[i]
         var key = String(size)
         var game = profile && profile.sizes ? profile.sizes[key] : null
-        sizes[key] = game ? copyState(game) : emptyState(0, size)
+        sizes[key] = game ? copyState(game) : newGameForSize(size)
     }
     return {
         version: VERSION,
@@ -1577,14 +1615,15 @@ function parseProfile(text) {
         if (!legacy) {
             return null
         }
-        var migrated = emptyProfile()
+        // A fresh, spawned board on every size; the legacy game replaces its own.
+        var migrated = newProfile()
         migrated.sizes[String(legacy.size)] = legacy
         migrated.activeSize = legacy.size
         // Credit only the tile badges the legacy data actually proves (its board
         // or its leaderboard entries); a legacy file has no safe record to
         // justify a win badge, so none is derived.
         migrated.achievements = derivedTileAchievements(gameBestTile(legacy))
-        return migrated
+        return healProfile(migrated)
     }
     if (data.version !== VERSION) {
         return null
@@ -1593,7 +1632,10 @@ function parseProfile(text) {
         return null
     }
 
-    var profile = emptyProfile()
+    // Spawn a fresh board on every size first, then let the stored games replace
+    // theirs; a missing size keeps its fresh board and an empty "playing" board
+    // is healed below.
+    var profile = newProfile()
     profile.activeSize = isSupportedSize(data.activeSize) ? Number(data.activeSize) : SIZE
     profile.settings = sanitizeSettings(data.settings)
     for (var i = 0; i < SUPPORTED_SIZES.length; i++) {
@@ -1607,6 +1649,7 @@ function parseProfile(text) {
     profile.stats = copyStatsBundle(data.stats)
     profile.achievements = sanitizeAchievements(data.achievements)
     profile.daily = copyDaily(data.daily)
+    profile = healProfile(profile)
     return profile
 }
 
