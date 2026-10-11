@@ -48,6 +48,10 @@ Panel {
   // 64 KiB read cap plus the no-symlink and owner-only rules.
   readonly property string helperPath: String(Qt.resolvedUrl("helpers/state_io.py")).replace(/^file:\/\//, "")
 
+  // Bundled merge blip, played with pw-play at a rate that rises with the
+  // merged tile. Only runs when the sound setting is on (off by default).
+  readonly property string soundPath: String(Qt.resolvedUrl("assets/merge.wav")).replace(/^file:\/\//, "")
+
   // Write serialization: one helper write in flight; a newer state queued while
   // writing replaces the pending one (latest wins, never two writers).
   property string pendingWrite: ""
@@ -67,16 +71,27 @@ Panel {
   // Gutter shrinks a little on bigger boards so the cells keep room.
   readonly property int boardGap: Math.max(Style.space(2), Math.round(Style.space(6) * 4 / Math.max(1, root.game.size)))
 
-  // Slide animation + score-gain timings (§4.2).
-  readonly property int slideMs: 90
-  readonly property int popMs: 120
-  readonly property int gainMs: 600
+  // Motion preference gate: `off` makes every animation instant, `reduced`
+  // shortens the core ones. Every animation in this panel checks one of these.
+  readonly property bool motionOn: Game.motionEnabled(root.gameSettings)
+  readonly property bool motionFull: Game.motionFull(root.gameSettings)
+
+  // Slide animation + score-gain timings (§4.2), scaled by motion.
+  readonly property int slideMs: root.motionOn ? (root.motionFull ? 90 : 45) : 1
+  readonly property int popMs: root.motionOn ? (root.motionFull ? 120 : 60) : 1
+  readonly property int gainMs: root.motionOn ? (root.motionFull ? 600 : 300) : 1
 
   // Transient animation state. `ghosts` mirrors the last move's transitions;
   // it is never persisted and is cleared when the slide ends.
   property var ghosts: []
   property bool sliding: false
   property int gainValue: 0
+
+  // Panel entrance (slide + scale), gated by motion.
+  property real entranceT: 1
+
+  // Confetti particles for a 2048 (small) / 4096 (big) burst.
+  property var confetti: []
 
   // Which view is shown. Not persisted; toggled with `t` / the header button.
   property bool showScores: false
@@ -94,6 +109,10 @@ Panel {
 
   // Drive the score text: animate between values, or set it instantly.
   function animateScore(from, to) {
+    if (!root.motionOn) {
+      root.setScoreInstantly(to)
+      return
+    }
     root.scoreFrom = from
     root.scoreTo = to
     root.scoreT = 0
@@ -134,19 +153,42 @@ Panel {
     if (root.sliding) root.finishSlide()
     var prevScore = root.game.score
     var prevBest = root.game.best
+    var prevMax = Game.maxTile(root.game.cells)
     var result = Game.move(root.game, direction, Math.random, Date.now())
-    if (!result.moved) return
-    root.ghosts = result.state.transitions
-    root.sliding = true
+    if (!result.moved) {
+      // A direction that changes nothing: shake the board (motion permitting).
+      if (root.game.status === Game.STATUS_PLAYING) root.shakeBoard()
+      return
+    }
+    if (root.motionOn) {
+      root.ghosts = result.state.transitions
+      root.sliding = true
+      slideTimer.restart()
+    } else {
+      root.ghosts = []
+      root.sliding = false
+    }
     root.profile = Game.setGame(root.profile, result.state)
     root.persist()
-    slideTimer.restart()
     if (result.state.gain > 0) root.pulseGain(result.state.gain)
     if (result.state.score !== prevScore) root.animateScore(prevScore, result.state.score)
     else root.setScoreInstantly(result.state.score)
     if (Game.isNewBest(prevBest, result.state) && !root.celebratedThisGame) {
       root.celebratedThisGame = true
-      bestCelebrate.restart()
+      if (root.motionOn) bestCelebrate.restart()
+    }
+    // Confetti when a tier is reached for the first time.
+    var newMax = Game.maxTile(result.state.cells)
+    if (prevMax < Game.WIN_VALUE && newMax >= Game.WIN_VALUE) root.burstConfetti(false)
+    if (prevMax < 4096 && newMax >= 4096) root.burstConfetti(true)
+    // Sound on a merge, pitch from the biggest merged tile.
+    if (result.state.merged.length > 0) {
+      var biggest = 0
+      for (var mi = 0; mi < result.state.merged.length; mi++) {
+        var mergedValue = result.state.cells[result.state.merged[mi]]
+        if (mergedValue > biggest) biggest = mergedValue
+      }
+      root.playMerge(biggest)
     }
   }
 
@@ -171,9 +213,56 @@ Panel {
 
   function pulseGain(value) {
     root.gainValue = value
+    if (!root.motionOn) return
     gainText.opacity = 1
     gainText.y = gainText.baseY
     gainAnim.restart()
+  }
+
+  // Short shake of the board on a direction that changes nothing.
+  function shakeBoard() {
+    if (!root.motionOn) return
+    boardShake.restart()
+  }
+
+  // Confetti burst on first reaching 2048 (small) or 4096 (big).
+  function burstConfetti(big) {
+    if (!root.motionOn) return
+    var count = big ? 90 : 48
+    var speed = big ? 150 : 95
+    var parts = []
+    for (var i = 0; i < count; i++) {
+      var angle = Math.random() * Math.PI * 2
+      var reach = speed + Math.random() * speed
+      parts.push({
+        dx: Math.cos(angle) * reach,
+        dy: Math.sin(angle) * reach,
+        size: 3 + Math.random() * 4,
+        rot: Math.random() * 720 - 360,
+        accent: (i % 2) === 0,
+        delay: Math.random() * 120
+      })
+    }
+    root.confetti = parts
+  }
+
+  // Play the merge blip, pitch set by the biggest tile in the merge.
+  function playMerge(value) {
+    if (!root.gameSettings.sound) return
+    if (mergeSound.running) return
+    mergeSound.rate = Game.soundRate(value)
+    mergeSound.running = true
+  }
+
+  // Panel entrance: slide down + scale up from 0.97, gated by motion.
+  function playEntrance() {
+    if (!root.motionOn) {
+      root.entranceT = 1
+      return
+    }
+    entranceAnim.duration = root.motionFull ? 220 : 120
+    root.entranceT = 0
+    entranceAnim.restart()
   }
 
   function newGame() {
@@ -184,6 +273,7 @@ Panel {
     root.persist()
     root.setScoreInstantly(next.score)
     root.celebratedThisGame = false
+    root.confetti = []
   }
 
   function keepGoing() {
@@ -219,6 +309,7 @@ Panel {
     root.sliding = false
     root.setScoreInstantly(Game.activeGame(root.profile).score)
     root.celebratedThisGame = false
+    root.confetti = []
   }
 
   // Loaded by the read helper below. Never writes back (that would loop between
@@ -237,6 +328,7 @@ Panel {
     root.lastStateText = text
     if (differentGame) root.celebratedThisGame = false
     root.setScoreInstantly(nextGame.score)
+    root.confetti = []
   }
 
   // Written only after a user action that changed state. One write at a time; a
@@ -389,6 +481,39 @@ Panel {
     }
   }
 
+  // Panel entrance (slide + scale) and the invalid-move shake.
+  NumberAnimation {
+    id: entranceAnim
+    target: root
+    property: "entranceT"
+    from: 0
+    to: 1
+    duration: 220
+    easing.type: Easing.OutCubic
+  }
+
+  SequentialAnimation {
+    id: boardShake
+    NumberAnimation { target: boardShakeTx; property: "x"; to: -Style.space(5); duration: 40; easing.type: Easing.OutQuad }
+    NumberAnimation { target: boardShakeTx; property: "x"; to: Style.space(5); duration: 60; easing.type: Easing.InOutQuad }
+    NumberAnimation { target: boardShakeTx; property: "x"; to: -Style.space(3); duration: 50; easing.type: Easing.InOutQuad }
+    NumberAnimation { target: boardShakeTx; property: "x"; to: 0; duration: 40; easing.type: Easing.OutQuad }
+  }
+
+  Connections {
+    target: root
+    function onOpenedChanged() { if (root.opened) root.playEntrance() }
+  }
+
+  // Optional merge sound: one bundled WAV, fixed argv, pitch rising with the
+  // tile through --rate. Off by default; only started when sound is on.
+  Process {
+    id: mergeSound
+    property int rate: 48000
+    command: ["pw-play", "--rate", "" + rate, root.soundPath]
+    running: false
+  }
+
   // Ctrl+Z is a standard undo accelerator. A window Shortcut handles it; the
   // PanelKeyCatcher only reports single-character text keys.
   Shortcut {
@@ -445,6 +570,11 @@ Panel {
         id: contentColumn
         width: parent.width
         spacing: 0
+        // Entrance: slide down + scale up from the top, gated by motion.
+        opacity: root.entranceT
+        y: (1 - root.entranceT) * -Style.space(12)
+        scale: 0.97 + 0.03 * root.entranceT
+        transformOrigin: Item.Top
 
         // Top margin so the gain label has room above the SCORE card.
         Item { width: 1; height: Style.space(24) }
@@ -754,6 +884,9 @@ Panel {
           width: Math.min(parent.width, Style.space(300))
           height: width
 
+          // Invalid-move shake writes here (a Translate keeps the anchors intact).
+          transform: Translate { id: boardShakeTx }
+
           readonly property int gridSize: root.game.size
           readonly property real cellSize: (width - root.boardGap * (gridSize + 1)) / gridSize
 
@@ -801,7 +934,7 @@ Panel {
                     Text {
                       anchors.centerIn: parent
                       visible: cellRoot.value > 0
-                      text: cellRoot.value
+                      text: Game.abbreviateTile(cellRoot.value)
                       color: root.tileTextColor(cellRoot.level)
                       font.family: Style.font.family
                       font.bold: true
@@ -829,6 +962,38 @@ Panel {
                     }
                   }
 
+                  // Glow ring on a big merge: 128+ (tier 1), stronger at 1024+
+                  // (tier 2). Driven from the same events as the pop.
+                  Rectangle {
+                    id: glowRing
+                    anchors.fill: parent
+                    anchors.margins: -Style.space(2)
+                    z: 5
+                    radius: Style.cornerRadius > 0 ? Style.space(7) : 0
+                    color: "transparent"
+                    border.color: Color.accent
+                    border.width: opacity > 0
+                      ? (tier >= 2 ? Math.max(2, Style.normalBorderWidth + 1) : Math.max(1, Style.normalBorderWidth))
+                      : 0
+                    opacity: 0
+                    visible: opacity > 0
+                    readonly property int tier: Game.glowTier(cellRoot.level)
+
+                    ParallelAnimation {
+                      id: glowAnim
+                      onStopped: { glowRing.scale = 1.0 }
+                      NumberAnimation {
+                        target: glowRing; property: "opacity"; from: 0.9; to: 0
+                        duration: glowRing.tier >= 2 ? 650 : 450; easing.type: Easing.OutCubic
+                      }
+                      NumberAnimation {
+                        target: glowRing; property: "scale"; from: 1.0
+                        to: glowRing.tier >= 2 ? 1.28 : 1.16
+                        duration: glowRing.tier >= 2 ? 650 : 450; easing.type: Easing.OutCubic
+                      }
+                    }
+                  }
+
                   // Trigger on the whole game object changing, not on a bool that
                   // can stay true across moves, so consecutive pops on the same
                   // cell still restart.
@@ -841,12 +1006,18 @@ Panel {
                       if (root.game.spawned === cellRoot.index
                           || root.game.merged.indexOf(cellRoot.index) !== -1)
                         popAnim.restart()
+                      if (root.motionOn && glowRing.tier > 0
+                          && root.game.merged.indexOf(cellRoot.index) !== -1)
+                        glowAnim.restart()
                     }
 
                     function onPopRequested() {
                       if (root.game.spawned === cellRoot.index
                           || root.game.merged.indexOf(cellRoot.index) !== -1)
                         popAnim.restart()
+                      if (root.motionOn && glowRing.tier > 0
+                          && root.game.merged.indexOf(cellRoot.index) !== -1)
+                        glowAnim.restart()
                     }
                   }
                 }
@@ -877,7 +1048,7 @@ Panel {
 
                   Text {
                     anchors.centerIn: parent
-                    text: ghost.modelData.value
+                    text: Game.abbreviateTile(ghost.modelData.value)
                     color: root.tileTextColor(Game.tileLevel(ghost.modelData.value))
                     font.family: Style.font.family
                     font.bold: true
@@ -1329,6 +1500,92 @@ Panel {
                 rightPadding: Style.spacing.controlPaddingX
                 topPadding: Style.spacing.controlPaddingY
                 bottomPadding: Style.spacing.controlPaddingY
+              }
+            }
+          }
+
+          // Combo badge: a streak of 3+ scoring moves in a row.
+          Rectangle {
+            id: comboBadge
+            anchors.top: parent.top
+            anchors.left: parent.left
+            anchors.margins: Style.space(6)
+            visible: root.game.combo >= 3
+              && root.game.status === Game.STATUS_PLAYING
+              && !root.showScores
+            width: comboLabel.implicitWidth + Style.space(10)
+            height: Style.space(16)
+            radius: Style.cornerRadius > 0 ? Style.space(8) : 0
+            color: Color.popups.background
+            border.width: Math.max(1, Style.normalBorderWidth)
+            border.color: Color.urgent
+
+            Text {
+              id: comboLabel
+              anchors.centerIn: parent
+              text: "×" + root.game.combo + " combo"
+              color: Color.urgent
+              font.family: Style.font.family
+              font.bold: true
+              font.pixelSize: Style.font.caption
+            }
+
+            Connections {
+              target: root
+              function onGameChanged() {
+                if (root.motionOn && root.game.combo >= 3) comboPop.restart()
+              }
+            }
+
+            SequentialAnimation {
+              id: comboPop
+              NumberAnimation { target: comboBadge; property: "scale"; from: 1.0; to: 1.18; duration: 90; easing.type: Easing.OutCubic }
+              NumberAnimation { target: comboBadge; property: "scale"; from: 1.18; to: 1.0; duration: 140; easing.type: Easing.OutCubic }
+            }
+          }
+
+          // Confetti on 2048 (small) / 4096 (big). Gated by motion and cleared
+          // on a new game; each particle flies out and fades.
+          Item {
+            id: confettiLayer
+            anchors.fill: parent
+            z: 30
+            visible: root.confetti.length > 0
+
+            Repeater {
+              model: root.confetti
+
+              Item {
+                id: particle
+                required property var modelData
+                readonly property real originX: confettiLayer.width / 2
+                readonly property real originY: confettiLayer.height / 2
+                width: modelData.size
+                height: modelData.size * 1.6
+                y: originY
+                opacity: 0
+
+                Rectangle {
+                  anchors.fill: parent
+                  radius: 1
+                  color: particle.modelData.accent ? Color.accent : Color.foreground
+                }
+
+                SequentialAnimation {
+                  id: particleAnim
+                  PauseAnimation { duration: particle.modelData.delay }
+                  ParallelAnimation {
+                    NumberAnimation { target: particle; property: "x"; from: particle.originX; to: particle.originX + particle.modelData.dx; duration: 720; easing.type: Easing.OutCubic }
+                    NumberAnimation { target: particle; property: "y"; from: particle.originY; to: particle.originY + particle.modelData.dy + Style.space(24); duration: 720; easing.type: Easing.OutCubic }
+                    NumberAnimation { target: particle; property: "rotation"; to: particle.modelData.rot; duration: 720 }
+                    SequentialAnimation {
+                      NumberAnimation { target: particle; property: "opacity"; from: 0; to: 1; duration: 60 }
+                      NumberAnimation { target: particle; property: "opacity"; to: 0; duration: 660 }
+                    }
+                  }
+                }
+
+                Component.onCompleted: particleAnim.start()
               }
             }
           }

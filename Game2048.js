@@ -10,6 +10,22 @@ var SUPPORTED_SIZES = [3, 4, 5, 6, 8]
 var UNDO_RING = 50
 var UNDO_CHALLENGE_LIMIT = 3
 var UNDO_UNLIMITED = "unlimited"
+// Tile labels shorten from here up ("16384" -> "16k", "131072" -> "131k") so
+// big boards never overflow, then the label length drives the font size.
+var ABBREVIATE_FROM = 10000
+// Glow-ring tiers: none, 128+, 1024+ (tile levels).
+var GLOW_LEVEL_1 = 7
+var GLOW_LEVEL_2 = 10
+// Motion preference. Every animation is gated by it.
+var MOTION_FULL = "full"
+var MOTION_REDUCED = "reduced"
+var MOTION_OFF = "off"
+// Merge sound: one bundled WAV played through pw-play at a rate that rises
+// with the merged tile's value (higher rate -> higher pitch).
+var SOUND_BASE_RATE = 24000
+var SOUND_RATE_STEP = 4000
+var SOUND_MIN_RATE = 22050
+var SOUND_MAX_RATE = 96000
 var WIN_VALUE = 2048
 var MAX_STATE_BYTES = 65536
 // Keep profile writes a little under the helper's hard 64 KiB cap.
@@ -88,7 +104,8 @@ function emptyState(best, size) {
         leaderboard: [],
         history: [],
         undoCount: 0,
-        assisted: false
+        assisted: false,
+        combo: 0
     }
 }
 
@@ -115,7 +132,8 @@ function copyState(state) {
         leaderboard: (state.leaderboard || []).slice(),
         history: copyHistory(state.history),
         undoCount: normalizeCount(state.undoCount),
-        assisted: state.assisted === true
+        assisted: state.assisted === true,
+        combo: normalizeCount(state.combo)
     }
 }
 
@@ -133,20 +151,22 @@ function snapshot(state) {
         score: state.score,
         moves: state.moves,
         status: state.status,
-        keepPlaying: state.keepPlaying === true
+        keepPlaying: state.keepPlaying === true,
+        combo: normalizeCount(state.combo)
     }
 }
 
 function copySnapshot(snap) {
     if (!snap || typeof snap !== "object" || !Array.isArray(snap.cells)) {
-        return { cells: [], score: 0, moves: 0, status: STATUS_PLAYING, keepPlaying: false }
+        return { cells: [], score: 0, moves: 0, status: STATUS_PLAYING, keepPlaying: false, combo: 0 }
     }
     return {
         cells: snap.cells.slice(),
         score: normalizeCount(snap.score),
         moves: normalizeCount(snap.moves),
         status: snap.status,
-        keepPlaying: snap.keepPlaying === true
+        keepPlaying: snap.keepPlaying === true,
+        combo: normalizeCount(snap.combo)
     }
 }
 
@@ -345,6 +365,8 @@ function move(state, direction, rng, now) {
     next.transitions = transitions
     // Record the pre-move board so `undo` can restore it (ring-capped).
     next.history = pushHistory(state.history, snapshot(state))
+    // Combo: a scoring move extends the streak, any other valid move breaks it.
+    next.combo = gain > 0 ? normalizeCount(state.combo) + 1 : 0
     next = spawn(next, rng)
     var status = next.status
     if (!next.keepPlaying && hasValueAtLeast(next.cells, WIN_VALUE)) {
@@ -450,16 +472,43 @@ function tileLevel(value) {
     return level
 }
 
+// Short label for a tile: plain below 10,000, then "16k" / "131k".
+function abbreviateTile(value) {
+    var n = Number(value)
+    if (!isFinite(n) || n < 0) n = 0
+    n = Math.floor(n)
+    if (n < ABBREVIATE_FROM) return String(n)
+    if (n < 1000000) return Math.floor(n / 1000) + "k"
+    return Math.floor(n / 1000000) + "M"
+}
+
 // Multiplier for the tile label font: fewer pixels as the board grows and as
-// the number gains digits, so text never overflows its cell. QML multiplies
-// Style.font.title by this.
+// the (abbreviated) label gains characters, so text never overflows its cell.
+// QML multiplies Style.font.title by this.
 function tileFontFactor(value, size) {
     var n = isSupportedSize(size) ? Number(size) : SIZE
-    var number = Number(value)
-    if (!isFinite(number) || number < 0) number = 0
-    var digits = String(Math.floor(number)).length
+    var digits = abbreviateTile(value).length
     var byDigits = digits <= 2 ? 1.6 : digits === 3 ? 1.3 : digits === 4 ? 1.05 : 0.85
     return byDigits * (4 / n)
+}
+
+// Glow-ring tier for a tile level: 0 none, 1 at 128+, 2 at 1024+.
+function glowTier(level) {
+    var l = Math.floor(Number(level))
+    if (!isFinite(l) || l < GLOW_LEVEL_1) return 0
+    if (l >= GLOW_LEVEL_2) return 2
+    return 1
+}
+
+// pw-play sample rate for a merge of `value`: rises with the tile so bigger
+// merges sound higher, clamped to a sane range.
+function soundRate(value) {
+    var level = tileLevel(value)
+    if (level < 1) level = 1
+    var rate = SOUND_BASE_RATE + (level - 1) * SOUND_RATE_STEP
+    if (rate < SOUND_MIN_RATE) rate = SOUND_MIN_RATE
+    if (rate > SOUND_MAX_RATE) rate = SOUND_MAX_RATE
+    return rate
 }
 
 function keepGoing(state) {
@@ -490,7 +539,8 @@ function gameToJson(state, includeHistory) {
         leaderboard: state.leaderboard || [],
         history: includeHistory === false ? [] : copyHistory(state.history),
         undoCount: normalizeCount(state.undoCount),
-        assisted: state.assisted === true
+        assisted: state.assisted === true,
+        combo: normalizeCount(state.combo)
     }
 }
 
@@ -551,7 +601,8 @@ function sanitizeHistory(raw, size) {
             score: snap.score,
             moves: snap.moves,
             status: snap.status,
-            keepPlaying: snap.keepPlaying === true
+            keepPlaying: snap.keepPlaying === true,
+            combo: normalizeCount(snap.combo)
         })
     }
     if (list.length > UNDO_RING) {
@@ -647,7 +698,8 @@ function parseGameObject(data) {
         leaderboard: leaderboard,
         history: sanitizeHistory(data.history, size),
         undoCount: normalizeCount(data.undoCount),
-        assisted: data.assisted === true
+        assisted: data.assisted === true,
+        combo: normalizeCount(data.combo)
     }
 }
 
@@ -775,17 +827,26 @@ function startNewGame(state, rng, now) {
 // --- settings, profiles and undo (Phase 5 · Unit 14) ----------------------
 
 function defaultSettings() {
-    return { allowUndo: true, undoLimit: UNDO_UNLIMITED }
+    return { allowUndo: true, undoLimit: UNDO_UNLIMITED, motion: MOTION_FULL, sound: false }
 }
 
 // Clamp arbitrary input to the known settings shape. A missing Allow undo is
-// on; any Undo limit other than the challenge value is unlimited.
+// on, any Undo limit other than the challenge value is unlimited, an unknown
+// motion falls back to full and sound is off unless true.
 function sanitizeSettings(raw) {
     var source = raw && typeof raw === "object" ? raw : {}
     var limit = source.undoLimit === UNDO_CHALLENGE_LIMIT || source.undoLimit === String(UNDO_CHALLENGE_LIMIT)
         ? UNDO_CHALLENGE_LIMIT
         : UNDO_UNLIMITED
-    return { allowUndo: source.allowUndo !== false, undoLimit: limit }
+    var motion = (source.motion === MOTION_FULL || source.motion === MOTION_REDUCED || source.motion === MOTION_OFF)
+        ? source.motion
+        : MOTION_FULL
+    return {
+        allowUndo: source.allowUndo !== false,
+        undoLimit: limit,
+        motion: motion,
+        sound: source.sound === true
+    }
 }
 
 function mergeSettings(current, patch) {
@@ -793,8 +854,19 @@ function mergeSettings(current, patch) {
     var source = patch && typeof patch === "object" ? patch : {}
     return sanitizeSettings({
         allowUndo: "allowUndo" in source ? source.allowUndo : base.allowUndo,
-        undoLimit: "undoLimit" in source ? source.undoLimit : base.undoLimit
+        undoLimit: "undoLimit" in source ? source.undoLimit : base.undoLimit,
+        motion: "motion" in source ? source.motion : base.motion,
+        sound: "sound" in source ? source.sound : base.sound
     })
+}
+
+// Animation gates used by Panel.qml: off disables, reduced shortens.
+function motionEnabled(settings) {
+    return sanitizeSettings(settings).motion !== MOTION_OFF
+}
+
+function motionFull(settings) {
+    return sanitizeSettings(settings).motion === MOTION_FULL
 }
 
 // Every supported size gets its own board, best and leaderboard. Settings are
@@ -911,6 +983,7 @@ function undo(state, settings) {
     next.moves = prev.moves
     next.status = prev.status
     next.keepPlaying = prev.keepPlaying
+    next.combo = normalizeCount(prev.combo)
     next.history = history.slice(0, history.length - 1)
     next.undoCount = normalizeCount(state.undoCount) + 1
     next.assisted = true

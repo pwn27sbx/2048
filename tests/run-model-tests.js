@@ -340,7 +340,8 @@ test("serializeState round-trips through parseState", () => {
     leaderboard: [],
     history: [],
     undoCount: 0,
-    assisted: false
+    assisted: false,
+    combo: 0
   })
 })
 
@@ -964,10 +965,11 @@ test("parseState rejects an unsupported board size", () => {
 // --- 21. undo ring --------------------------------------------------------
 
 test("defaultSettings returns the documented defaults", () => {
-  same(Game.defaultSettings(), { allowUndo: true, undoLimit: "unlimited" })
-  same(Game.sanitizeSettings(null), { allowUndo: true, undoLimit: "unlimited" })
-  same(Game.sanitizeSettings({ allowUndo: false, undoLimit: 3 }), { allowUndo: false, undoLimit: 3 })
-  same(Game.sanitizeSettings({ allowUndo: "yes", undoLimit: 5 }), { allowUndo: true, undoLimit: "unlimited" })
+  const defaults = { allowUndo: true, undoLimit: "unlimited", motion: "full", sound: false }
+  same(Game.defaultSettings(), defaults)
+  same(Game.sanitizeSettings(null), defaults)
+  same(Game.sanitizeSettings({ allowUndo: false, undoLimit: 3 }), { allowUndo: false, undoLimit: 3, motion: "full", sound: false })
+  same(Game.sanitizeSettings({ allowUndo: "yes", undoLimit: 5 }), defaults)
 })
 
 test("pushHistory keeps the last 50 snapshots (ring bound)", () => {
@@ -1094,11 +1096,16 @@ test("startNewGame resets the undo history and the assisted flag", () => {
   assert.equal(next.best, 50)
 })
 
-test("tileFontFactor shrinks with the board size and digit count", () => {
+test("tileFontFactor shrinks with the board size and the label length", () => {
   assert.ok(Game.tileFontFactor(2, 4) > Game.tileFontFactor(2, 8))
   assert.ok(Game.tileFontFactor(2, 4) > Game.tileFontFactor(131072, 4))
   assert.ok(Game.tileFontFactor(131072, 8) > 0)
   assert.equal(Game.tileFontFactor(2, 3) > Game.tileFontFactor(2, 4), true)
+  // The label length is the abbreviated one: "131k" (4) is smaller than "16k" (3),
+  // and both are larger than a raw 5-6 digit number at 8x8 would have been.
+  assert.ok(Math.abs(Game.tileFontFactor(131072, 8) - 1.05 * 0.5) < 1e-9)
+  assert.ok(Math.abs(Game.tileFontFactor(16384, 8) - 1.3 * 0.5) < 1e-9)
+  assert.ok(Game.tileFontFactor(131072, 8) > 0.85 * 0.5, "abbreviation beats the old tiny 5-6 digit factor")
 })
 
 // --- 22. profile persistence and migration --------------------------------
@@ -1107,13 +1114,13 @@ test("emptyProfile carries every supported size and default settings", () => {
   const profile = Game.emptyProfile()
   assert.equal(profile.version, 3)
   assert.equal(profile.activeSize, 4)
-  same(profile.settings, { allowUndo: true, undoLimit: "unlimited" })
   for (const size of Game.SUPPORTED_SIZES) {
     const game = profile.sizes[String(size)]
     assert.equal(game.size, size)
     assert.equal(game.cells.length, size * size)
     same(game.leaderboard, [])
   }
+  same(profile.settings, { allowUndo: true, undoLimit: "unlimited", motion: "full", sound: false })
 })
 
 test("setActiveSize/cycleSize switch boards and wrap around", () => {
@@ -1145,7 +1152,7 @@ test("serializeProfile round-trips the active game, history and settings", () =>
   const text = Game.serializeProfile(profile)
   const back = Game.parseProfile(text)
   assert.equal(back.activeSize, 4)
-  same(back.settings, { allowUndo: true, undoLimit: 3 })
+  same(back.settings, { allowUndo: true, undoLimit: 3, motion: "full", sound: false })
   const game = Game.activeGame(back)
   same(game.cells, moved.state.cells)
   assert.equal(game.best, moved.state.best)
@@ -1214,4 +1221,163 @@ test("serializeProfile stays under MAX_STATE_BYTES for worst-case content", () =
   const back = Game.parseProfile(text)
   assert.equal(back.sizes["8"].best, 1e9, "the board survived the trim")
   assert.equal(back.sizes["8"].leaderboard.length, 10, "the leaderboard survived the trim")
+})
+
+// =========================================================================
+// Phase 5 · Unit 15 — feel: abbreviated tiles, combo, glow, motion, sound
+// =========================================================================
+
+// --- 23. abbreviated tile labels ------------------------------------------
+
+test("abbreviateTile shortens tiles from 10,000 up", () => {
+  const table = [
+    [0, "0"],
+    [2, "2"],
+    [2048, "2048"],
+    [8192, "8192"],
+    [9999, "9999"],
+    [10000, "10k"],
+    [16384, "16k"],
+    [20480, "20k"],
+    [32768, "32k"],
+    [65536, "65k"],
+    [131072, "131k"]
+  ]
+  for (const [value, label] of table) {
+    assert.equal(Game.abbreviateTile(value), label, `abbreviateTile(${value})`)
+  }
+  // garbage never throws and degrades to "0"
+  assert.equal(Game.abbreviateTile(undefined), "0")
+  assert.equal(Game.abbreviateTile(NaN), "0")
+})
+
+test("tileFontFactor reads the abbreviated label, not the raw digits", () => {
+  // "131k" (4 chars) and "16k" (3 chars) instead of 6 and 5 raw digits
+  assert.ok(Math.abs(Game.tileFontFactor(131072, 8) - 1.05 * 0.5) < 1e-9)
+  assert.ok(Math.abs(Game.tileFontFactor(16384, 8) - 1.3 * 0.5) < 1e-9)
+  assert.ok(Game.tileFontFactor(131072, 8) > 0.85 * 0.5, "big tiles are no longer tiny")
+})
+
+// --- 24. combo streak -----------------------------------------------------
+
+test("emptyState starts with a zero combo", () => {
+  assert.equal(Game.emptyState(0, 4).combo, 0)
+  assert.equal(Game.emptyState(0, 8).combo, 0)
+})
+
+test("move increments the combo on a scoring move and resets it otherwise", () => {
+  const merge = playing([2, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], 4)
+  const scored = Game.move(merge, "left", seq(0.5, 0.5))
+  assert.equal(scored.moved, true)
+  assert.equal(scored.state.combo, 1)
+  const again = Game.move(scored.state, "left", seq(0.5, 0.5))
+  // the board cannot merge again after the spawn: a valid non-scoring move resets
+  if (again.moved && again.state.gain === 0) {
+    assert.equal(again.state.combo, 0)
+  }
+  const carried = playing([2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2], 4, { combo: 4 })
+  const slide = Game.move(carried, "left", seq(0.5, 0.5))
+  assert.equal(slide.moved, true)
+  assert.equal(slide.state.gain, 0)
+  assert.equal(slide.state.combo, 0, "a non-scoring move breaks the streak")
+})
+
+test("an invalid move leaves the combo untouched", () => {
+  const stuck = playing([2, 4, 8, 16, 4, 8, 16, 32, 8, 16, 32, 64, 16, 32, 64, 128], 4, { combo: 3 })
+  const res = Game.move(stuck, "left", seq())
+  assert.equal(res.moved, false)
+  assert.equal(res.state.combo, 3)
+})
+
+test("undo restores the combo of the snapshot", () => {
+  const start = playing([2, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], 4, { combo: 2 })
+  const moved = Game.move(start, "left", seq(0.5, 0.5))
+  assert.equal(moved.state.combo, 3)
+  const back = Game.undo(moved.state, Game.defaultSettings())
+  assert.equal(back.undone, true)
+  assert.equal(back.state.combo, 2)
+})
+
+// --- 25. glow tiers -------------------------------------------------------
+
+test("glowTier steps at 128 (1) and 1024 (2)", () => {
+  assert.equal(Game.glowTier(0), 0)
+  assert.equal(Game.glowTier(6), 0) // 64
+  assert.equal(Game.glowTier(7), 1) // 128
+  assert.equal(Game.glowTier(9), 1) // 512
+  assert.equal(Game.glowTier(10), 2) // 1024
+  assert.equal(Game.glowTier(11), 2) // 2048
+  assert.equal(Game.glowTier(17), 2) // 131072
+})
+
+// --- 26. motion setting and sound rate ------------------------------------
+
+test("settings carry motion and sound with safe defaults", () => {
+  const defaults = { allowUndo: true, undoLimit: "unlimited", motion: "full", sound: false }
+  same(Game.sanitizeSettings(null), defaults)
+  same(Game.sanitizeSettings({ motion: "off", sound: true }), { allowUndo: true, undoLimit: "unlimited", motion: "off", sound: true })
+  same(Game.sanitizeSettings({ motion: "reduced" }), { allowUndo: true, undoLimit: "unlimited", motion: "reduced", sound: false })
+  same(Game.sanitizeSettings({ motion: "sideways", sound: "yes" }), defaults)
+})
+
+test("motion helpers gate animations", () => {
+  assert.equal(Game.MOTION_FULL, "full")
+  assert.equal(Game.MOTION_REDUCED, "reduced")
+  assert.equal(Game.MOTION_OFF, "off")
+  assert.equal(Game.motionEnabled({ motion: "full" }), true)
+  assert.equal(Game.motionEnabled({ motion: "reduced" }), true)
+  assert.equal(Game.motionEnabled({ motion: "off" }), false)
+  assert.equal(Game.motionFull({ motion: "full" }), true)
+  assert.equal(Game.motionFull({ motion: "reduced" }), false)
+  assert.equal(Game.motionFull({ motion: "off" }), false)
+})
+
+test("soundRate rises with the tile value and is clamped", () => {
+  assert.ok(Game.soundRate(4) < Game.soundRate(64))
+  assert.ok(Game.soundRate(64) < Game.soundRate(1024))
+  assert.ok(Game.soundRate(1024) < Game.soundRate(131072))
+  assert.ok(Game.soundRate(4) >= 22050)
+  assert.ok(Game.soundRate(131072) <= 96000)
+  assert.equal(Game.soundRate(0), Game.soundRate(2), "below 4 clamps to the floor")
+})
+
+// --- 27. persistence of the new fields ------------------------------------
+
+test("the profile round-trips combo, motion and sound", () => {
+  let profile = Game.emptyProfile()
+  const move = Game.move(playing([2, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], 4), "left", seq(0.5, 0.5))
+  profile = Game.setGame(profile, move.state)
+  profile = Game.updateSettings(profile, { motion: "reduced", sound: true })
+  const back = Game.parseProfile(Game.serializeProfile(profile))
+  same(back.settings, { allowUndo: true, undoLimit: "unlimited", motion: "reduced", sound: true })
+  assert.equal(Game.activeGame(back).combo, 1)
+})
+
+test("parseProfile fills motion, sound and combo for older payloads", () => {
+  const payload = {
+    version: 3,
+    activeSize: 4,
+    settings: { allowUndo: true, undoLimit: "unlimited" },
+    sizes: {
+      "4": { version: 3, size: 4, cells: square(4, 0), score: 0, best: 0, moves: 0, status: "playing", keepPlaying: false }
+    }
+  }
+  const profile = Game.parseProfile(JSON.stringify(payload))
+  same(profile.settings, { allowUndo: true, undoLimit: "unlimited", motion: "full", sound: false })
+  assert.equal(profile.sizes["4"].combo, 0)
+})
+
+test("serializeProfile still stays under MAX_STATE_BYTES with combo included", () => {
+  let profile = Game.emptyProfile()
+  for (const size of Game.SUPPORTED_SIZES) {
+    const cells = square(size, 131072)
+    const history = []
+    for (let i = 0; i < 50; i++) history.push(snapshotOf(cells, 1e9, 1e6))
+    profile = Game.setGame(profile, {
+      version: 3, size, cells, score: 1e9, best: 1e9, moves: 1e6, status: "playing",
+      keepPlaying: false, startedAt: 1e13, recorded: false, lastRank: 0, lastRecordedAt: 0,
+      leaderboard: [], history, undoCount: 0, assisted: false, combo: 7
+    })
+  }
+  assert.ok(Game.serializeProfile(profile).length <= 65536)
 })
