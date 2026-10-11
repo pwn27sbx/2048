@@ -1,6 +1,6 @@
 # 2048
 
-The classic 2048 sliding-tile game in a keyboard-driven, theme-aware Omarchy bar panel — with undo, six board sizes, stats, achievements and a daily challenge.
+The classic 2048 sliding-tile game in a keyboard-driven, theme-aware Omarchy bar panel — with undo, six board sizes, stats, achievements and a daily challenge. Navigation lives in a visible six-tab bar, and the header puts the live score first.
 
 ![2048 panel](preview.png)
 
@@ -15,7 +15,7 @@ The classic 2048 sliding-tile game in a keyboard-driven, theme-aware Omarchy bar
 ## Features
 
 **Game**
-- Boards from **3×3 to 8×8** (3, 4, 5, 6, 7 and 8). Each size keeps its own saved game, best score and top-10 leaderboard; switch with `[` / `]`, the header badge, or the settings page.
+- Boards from **3×3 to 8×8** (3, 4, 5, 6, 7 and 8). Each size keeps its own saved game, best score and top-10 leaderboard; switch with `[` / `]`, the header size chip (its inline picker), or the settings page.
 - **Undo** the last 50 moves (`U` / `Ctrl+Z`), including out of a game over or the win card. A game that used undo is marked *assisted* and never enters the leaderboard.
 - Slide/pop animation, a `+N` gain indicator, a score count-up, invalid-move shake, big-merge glow rings (128+ and stronger at 1024+), a combo badge for streaks, and confetti on 2048/4096.
 - **Optional sound** (off by default): a merge blip whose pitch rises with the tile.
@@ -29,7 +29,14 @@ The classic 2048 sliding-tile game in a keyboard-driven, theme-aware Omarchy bar
 **Look and feel**
 - Theme-native by default: every colour comes from the active Omarchy theme, and tile text is chosen by WCAG contrast. Optional **classic 2048**, **mono** and **high-contrast** palettes.
 - **Numerals** in five scripts (Western, Arabic-Indic, Devanagari, Bengali, CJK) on tiles and scores.
-- **Window scale** 90–150 %, a `motion` setting (full / reduced / off) that gates every animation, and a header/footer that stays out of the way.
+- **Window scale** 90–150 %, a `motion` setting (full / reduced / off) that gates every animation (including the page fade), and a short per-page footer.
+
+### Navigation
+
+- A **visible six-tab bar** — Board · Scores · Stats · Awards · Daily · Setup — reachable by click, `1`–`6`, or `T` / `Shift+T`. The active tab is highlighted, and a small dot marks news (a daily ready to play, or an unseen badge).
+- The **header is score-first**: the live score is the hero, best is a small secondary, the board-size chip opens an **inline picker**, and undo / new game are grouped on the right.
+- **Settings** is grouped into Game · Look · Sound & motion · Advanced; **Reset stats** lives under Advanced behind a confirm prompt (stats and badges are cleared, bests and leaderboards are kept).
+- `?` opens the **full keyboard help** as an overlay; footers stay short and per page. Settings and Help scroll with the arrow keys or `j` / `k`.
 
 ### Compared with a typical 2048 plugin
 
@@ -66,14 +73,15 @@ No other dependencies. The plugin itself bundles no runtime beyond these.
 
 | Key / input | Action |
 |---|---|
-| Arrow keys / `H` `J` `K` `L` / `W` `A` `S` `D` | Move tiles |
+| Arrow keys / `H` `J` `K` `L` / `W` `A` `S` `D` | Move tiles (arrows / `j` `k` scroll on Settings and Help) |
 | Drag or swipe on the board | Move tiles (mouse / touchpad) |
 | `U` or `Ctrl+Z` | Undo the last move |
-| `[` / `]` or the header size badge | Switch board size (3×3 – 8×8) |
+| `[` / `]` or the header size chip | Switch board size (3×3 – 8×8); the chip opens an inline picker |
+| `1` … `6` | Jump to a tab: Board · Scores · Stats · Awards · Daily · Setup |
+| `T` / `Shift+T` | Next / previous tab |
 | `R` | New game (a confirm prompt if the setting is on) |
-| `T` | Next page: board → scores → stats → achievements → daily → settings → help |
-| `?` | Keyboard help |
-| `Enter` / `Space` | Keep going after 2048; new game after game over |
+| `?` | Keyboard help (full key list) |
+| `Enter` / `Space` | Keep going after 2048; new game after game over; play the daily |
 | `Esc` | Back a page, leave the daily, or close the panel |
 | `Tab` | Switch to the neighbouring bar panel |
 
