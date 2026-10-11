@@ -1813,3 +1813,28 @@ test("a finished board is not healed", () => {
   same(healed.sizes["4"].cells, square(4, 0), "an over board is left alone")
   assert.equal(healed.sizes["3"].cells.filter((v) => v !== 0).length, 2, "the empty playing 3x3 is healed")
 })
+
+// --- 37. the board swipe area must not cover the win/over card buttons -----
+
+test("isBoardInteractive only when a game is in progress on the board page", () => {
+  const playing4 = playing(square(4, 0), 4, { status: "playing" })
+  assert.equal(Game.isBoardInteractive(playing4, ""), true)
+  // a won or over game shows the card; the swipe area must stand down so the
+  // card's buttons (Keep going / Undo / New game) receive the click
+  assert.equal(Game.isBoardInteractive(playing(square(4, 0), 4, { status: "won" }), ""), false)
+  assert.equal(Game.isBoardInteractive(playing(square(4, 0), 4, { status: "over" }), ""), false)
+  assert.equal(Game.isBoardInteractive(playing4, "stats"), false)
+  assert.equal(Game.isBoardInteractive(playing4), false, "a missing view is not the board")
+  assert.equal(Game.isBoardInteractive(null, ""), false)
+})
+
+test("Panel.qml gates the board swipe area so it cannot cover the card buttons", () => {
+  const panel = fs.readFileSync(path.join(__dirname, "..", "Panel.qml"), "utf8")
+  const at = panel.indexOf("id: boardDrag")
+  assert.ok(at > -1, "boardDrag exists")
+  const block = panel.slice(at, at + 400)
+  assert.ok(
+    /enabled:\s*Game\.isBoardInteractive\(/.test(block),
+    "boardDrag must be gated by isBoardInteractive (a full-board MouseArea above the win/over card swallowed its button clicks)"
+  )
+})

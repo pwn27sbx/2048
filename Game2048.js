@@ -504,6 +504,16 @@ function canMove(cells) {
     return false
 }
 
+// The board's swipe MouseArea is only active on the board page while a game is
+// in progress. Otherwise it sits above the win/over card and swallows the
+// card's button clicks (Keep going / Undo / New game).
+function isBoardInteractive(game, view) {
+    if (view !== "") {
+        return false
+    }
+    return !!game && game.status === STATUS_PLAYING
+}
+
 function hasValueAtLeast(cells, value) {
     var i
     for (i = 0; i < cells.length; i++) {

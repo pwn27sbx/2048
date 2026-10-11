@@ -1463,6 +1463,9 @@ Panel {
           MouseArea {
             id: boardDrag
             anchors.fill: parent
+            // Only grab the board while a game is in progress on the board page,
+            // so it never covers the win/over card's buttons.
+            enabled: Game.isBoardInteractive(root.game, root.view)
             property real pressX: 0
             property real pressY: 0
 
