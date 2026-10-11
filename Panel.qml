@@ -120,8 +120,6 @@ Panel {
   // Inline board-size picker (under the header chip).
   property bool sizePickerOpen: false
   property int sizePickIndex: 0
-  property real sizePickerX: 0
-  property real sizePickerY: 0
   // Motion-gated fade when a tab changes.
   property real pageT: 1
   // True while the score is ahead of (or just beat) the best, for the ▲ mark.
@@ -490,12 +488,6 @@ Panel {
     var index = Game.SUPPORTED_SIZES.indexOf(root.game.size)
     root.sizePickIndex = index === -1 ? 0 : index
     root.sizePickerOpen = true
-    // Anchor the overlay under the header chip (after layout settles).
-    Qt.callLater(function() {
-      var origin = sizeChipButton.mapToItem(contentColumn, 0, sizeChipButton.height + Style.space(4))
-      root.sizePickerX = origin.x
-      root.sizePickerY = origin.y
-    })
   }
 
   function closeSizePicker() {
@@ -1438,77 +1430,10 @@ Panel {
           }
         }
 
-        Item { width: 1; height: Style.space(10) }
+        Item { width: 1; height: Style.space(8) }
 
-        // 1c. Inline board-size picker: an overlay under the header chip.
-        //     `[`/`]` cycle without it; ↑/↓ move, Enter picks, Esc closes.
-        Rectangle {
-          id: sizePicker
-          visible: root.sizePickerOpen
-          z: 60
-          x: Math.max(Style.space(0), Math.min(boardFrame.width - width, root.sizePickerX))
-          y: root.sizePickerY
-          width: Style.space(104)
-          height: sizePickColumn.implicitHeight + Style.space(8)
-          color: Color.popups.background
-          radius: Style.cornerRadius
-          border.width: Math.max(1, Style.normalBorderWidth)
-          border.color: Color.popups.border
-
-          Column {
-            id: sizePickColumn
-            width: parent.width - Style.space(8)
-            anchors.horizontalCenter: parent.horizontalCenter
-            anchors.top: parent.top
-            anchors.topMargin: Style.space(4)
-            spacing: 0
-
-            Text {
-              text: "Board size"
-              color: Color.muted
-              font.family: Style.font.family
-              font.pixelSize: Style.font.caption
-            }
-
-            Repeater {
-              model: Game.SUPPORTED_SIZES
-
-              Rectangle {
-                required property var modelData
-                required property int index
-
-                width: parent.width
-                height: Style.space(20)
-                radius: Style.cornerRadius > 0 ? Style.space(4) : 0
-                color: index === root.sizePickIndex ? Util.alpha(Color.accent, 0.22) : "transparent"
-
-                Text {
-                  anchors.left: parent.left
-                  anchors.leftMargin: Style.space(6)
-                  anchors.verticalCenter: parent.verticalCenter
-                  text: (root.game.size === modelData ? "\u2713 " : "   ") + modelData + "×" + modelData
-                  color: root.game.size === modelData ? Color.accent : Color.foreground
-                  font.family: Style.font.family
-                  font.pixelSize: Style.font.bodySmall
-                }
-
-                MouseArea {
-                  anchors.fill: parent
-                  hoverEnabled: true
-                  cursorShape: Qt.PointingHandCursor
-                  onEntered: root.sizePickIndex = index
-                  onClicked: {
-                    keyCatcher.forceActiveFocus()
-                    root.sizePickIndex = index
-                    root.chooseSizePick()
-                  }
-                }
-              }
-            }
-          }
-        }
-
-        Item { width: 1; height: Style.space(10) }
+        // 1c. (the board-size picker overlay lives in the key catcher below)
+        Item { width: 1; height: Style.space(8) }
 
         // 2. Board: a square grid of 16 cells, single (borderless) surface.
         Item {
@@ -3132,6 +3057,88 @@ Panel {
                   opacity: 0.65
                   font.family: Style.font.family
                   font.pixelSize: Style.font.bodySmall
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // Inline board-size picker overlay. It lives in the (non-positioner) key
+      // catcher so it can sit freely under the header chip and above the tabs
+      // and the board. `[`/`]` cycle without it; ↑/↓ move, Enter picks; Esc or
+      // a click anywhere outside closes it.
+      MouseArea {
+        visible: root.sizePickerOpen
+        anchors.fill: parent
+        z: 70
+        onClicked: root.closeSizePicker()
+      }
+
+      Rectangle {
+        id: sizePicker
+        visible: root.sizePickerOpen
+        z: 71
+        scale: root.uiScale
+        transformOrigin: Item.TopLeft
+        width: Style.space(104)
+        height: sizePickColumn.implicitHeight + Style.space(8)
+        x: {
+          var p = sizeChipButton.mapToItem(keyCatcher, 0, 0)
+          return Math.max(Style.space(2), Math.min(keyCatcher.width - width * root.uiScale - Style.space(2), p.x))
+        }
+        y: sizeChipButton.mapToItem(keyCatcher, 0, sizeChipButton.height + Style.space(4)).y
+        color: Color.popups.background
+        radius: Style.cornerRadius
+        border.width: Math.max(1, Style.normalBorderWidth)
+        border.color: Color.popups.border
+
+        Column {
+          id: sizePickColumn
+          width: parent.width - Style.space(8)
+          anchors.horizontalCenter: parent.horizontalCenter
+          anchors.top: parent.top
+          anchors.topMargin: Style.space(4)
+          spacing: 0
+
+          Text {
+            text: "Board size"
+            color: Color.muted
+            font.family: Style.font.family
+            font.pixelSize: Style.font.caption
+          }
+
+          Repeater {
+            model: Game.SUPPORTED_SIZES
+
+            Rectangle {
+              required property var modelData
+              required property int index
+
+              width: parent.width
+              height: Style.space(20)
+              radius: Style.cornerRadius > 0 ? Style.space(4) : 0
+              color: index === root.sizePickIndex ? Util.alpha(Color.accent, 0.22) : "transparent"
+
+              Text {
+                anchors.left: parent.left
+                anchors.leftMargin: Style.space(6)
+                anchors.verticalCenter: parent.verticalCenter
+                text: (root.game.size === modelData ? "\u2713 " : "   ") + modelData + "×" + modelData
+                color: root.game.size === modelData ? Color.accent : Color.foreground
+                font.family: Style.font.family
+                font.pixelSize: Style.font.bodySmall
+              }
+
+              MouseArea {
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onEntered: root.sizePickIndex = index
+                onClicked: {
+                  keyCatcher.forceActiveFocus()
+                  root.sizePickIndex = index
+                  root.chooseSizePick()
                 }
               }
             }
