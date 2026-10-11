@@ -1080,7 +1080,7 @@ Panel {
             Item {
               id: headerTopRow
               width: parent.width
-              height: Style.space(26)
+              height: Style.space(44)
 
               Row {
                 id: brandRow
@@ -1164,17 +1164,17 @@ Panel {
 
                 Rectangle {
                   id: undoButton
-                  width: Style.space(32)
-                  height: Style.space(32)
+                  width: Style.space(44)
+                  height: Style.space(44)
                   radius: Style.cornerRadius > 0 ? Style.space(6) : 0
                   opacity: root.canUndo ? 1 : 0.4
                   color: undoMouse.containsMouse && root.canUndo
                     ? Util.alpha(Color.foreground, 0.14)
                     : Util.alpha(Color.foreground, 0.07)
 
-                  // Both header icons use the Nerd Font and are centred by the
-                  // glyph's ink box (Nerd icons sit flush-left in their mono
-                  // advance, so anchors.centerIn alone would bias them right).
+                  // Both header icons use the Nerd Font, centred by the glyph's
+                  // tight ink box horizontally and on the line box vertically
+                  // (Nerd glyph ink is flush-left in its mono advance).
                   TextMetrics {
                     id: undoTm
                     font.family: Style.font.family
@@ -1182,8 +1182,8 @@ Panel {
                     text: "\uF0E2"
                   }
                   Text {
-                    x: Math.round((parent.width - undoTm.boundingRect.width) / 2 - undoTm.boundingRect.x)
-                    y: Math.round((parent.height - undoTm.boundingRect.height) / 2 - undoTm.boundingRect.y)
+                    anchors.verticalCenter: parent.verticalCenter
+                    x: Math.round((parent.width - undoTm.tightBoundingRect.width) / 2 - undoTm.tightBoundingRect.x)
                     text: "\uF0E2"
                     color: Color.foreground
                     font.family: Style.font.family
@@ -1226,8 +1226,8 @@ Panel {
 
                 Rectangle {
                   id: newGameButton
-                  width: Style.space(32)
-                  height: Style.space(32)
+                  width: Style.space(44)
+                  height: Style.space(44)
                   radius: Style.cornerRadius > 0 ? Style.space(6) : 0
                   color: newGameMouse.containsMouse
                     ? Util.alpha(Color.foreground, 0.14)
@@ -1240,8 +1240,8 @@ Panel {
                     text: "\uF067"
                   }
                   Text {
-                    x: Math.round((parent.width - plusTm.boundingRect.width) / 2 - plusTm.boundingRect.x)
-                    y: Math.round((parent.height - plusTm.boundingRect.height) / 2 - plusTm.boundingRect.y)
+                    anchors.verticalCenter: parent.verticalCenter
+                    x: Math.round((parent.width - plusTm.tightBoundingRect.width) / 2 - plusTm.tightBoundingRect.x)
                     text: "\uF067"
                     color: Color.foreground
                     font.family: Style.font.family
