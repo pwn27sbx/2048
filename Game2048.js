@@ -43,6 +43,11 @@ var ACHIEVEMENTS = [
     { id: "streak5", title: "On fire", description: "Win 5 games in a row." },
     { id: "comeback", title: "Comeback", description: "Win from a board with 15 or more tiles." }
 ]
+// A win-type badge is only possible once a 2048 tile was built, and every
+// higher tile badge implies the lower ones. `closeAchievements` enforces that
+// a stored badge set is always closed this way.
+var TILE_ACHIEVEMENTS = ["first512", "first1024", "first2048", "first4096"]
+var WIN_ACHIEVEMENTS = ["win_no_undo", "win_swift", "comeback", "streak5"]
 var WIN_VALUE = 2048
 var MAX_STATE_BYTES = 65536
 // Keep profile writes a little under the helper's hard 64 KiB cap.
@@ -1078,13 +1083,55 @@ function occupiedCount(cells) {
 
 // --- achievements (Phase 5 · Unit 16) -------------------------------------
 
+// Drop unknown ids, then close the set: a higher tile badge implies the lower
+// ones, and any win-type badge implies the 2048 tile (and so 512/1024). This
+// is the migration guard that stops an inconsistent stored/legacy set (e.g.
+// "win_swift" without "first2048").
 function sanitizeAchievements(raw) {
     var owned = []
     for (var i = 0; i < ACHIEVEMENTS.length; i++) {
         var id = ACHIEVEMENTS[i].id
         if (Array.isArray(raw) && raw.indexOf(id) !== -1) owned.push(id)
     }
-    return owned
+    return closeAchievements(owned)
+}
+
+function closeAchievements(ids) {
+    var want = {}
+    var list = Array.isArray(ids) ? ids : []
+    var i
+    for (i = 0; i < list.length; i++) want[list[i]] = true
+    if (want["first4096"]) want["first2048"] = true
+    for (i = 0; i < WIN_ACHIEVEMENTS.length; i++) {
+        if (want[WIN_ACHIEVEMENTS[i]]) want["first2048"] = true
+    }
+    if (want["first2048"]) want["first1024"] = true
+    if (want["first1024"]) want["first512"] = true
+    var out = []
+    for (i = 0; i < ACHIEVEMENTS.length; i++) {
+        if (want[ACHIEVEMENTS[i].id]) out.push(ACHIEVEMENTS[i].id)
+    }
+    return out
+}
+
+// Tile badges proven by a board that reached `bestTile`; never a win badge.
+function derivedTileAchievements(bestTile) {
+    var ids = []
+    if (bestTile >= 512) ids.push("first512")
+    if (bestTile >= 1024) ids.push("first1024")
+    if (bestTile >= 2048) ids.push("first2048")
+    if (bestTile >= 4096) ids.push("first4096")
+    return closeAchievements(ids)
+}
+
+// Best tile a legacy game proves: its board or any recorded leaderboard entry.
+function gameBestTile(game) {
+    var best = maxTile(game.cells)
+    var leaderboard = game.leaderboard || []
+    for (var i = 0; i < leaderboard.length; i++) {
+        if (normalizeCount(leaderboard[i].maxTile) > best) best = normalizeCount(leaderboard[i].maxTile)
+    }
+    return best
 }
 
 // Ids currently satisfied by this game (and the accumulated stats streak).
@@ -1105,18 +1152,20 @@ function achievementIdsFor(game, stats) {
 }
 
 // Merge newly satisfied achievements into the profile; return the ids that were
-// unlocked by this evaluation only.
+// unlocked by this evaluation only (including any closure-added ones, e.g. the
+// 2048 badge implied by a win badge, so its toast fires too).
 function evaluateAchievements(profile, game) {
     var stats = profile && profile.stats ? profile.stats.overall : null
     var ids = achievementIdsFor(game, stats)
     var owned = (profile && Array.isArray(profile.achievements)) ? profile.achievements : []
+    var merged = closeAchievements(owned.concat(ids))
     var unlocked = []
-    for (var i = 0; i < ids.length; i++) {
-        if (owned.indexOf(ids[i]) === -1) unlocked.push(ids[i])
+    for (var i = 0; i < merged.length; i++) {
+        if (owned.indexOf(merged[i]) === -1) unlocked.push(merged[i])
     }
     if (unlocked.length === 0) return { profile: profile, unlocked: [] }
     var next = copyProfile(profile)
-    next.achievements = sanitizeAchievements(owned.concat(unlocked))
+    next.achievements = merged
     return { profile: next, unlocked: unlocked }
 }
 
@@ -1421,6 +1470,10 @@ function parseProfile(text) {
         var migrated = emptyProfile()
         migrated.sizes[String(legacy.size)] = legacy
         migrated.activeSize = legacy.size
+        // Credit only the tile badges the legacy data actually proves (its board
+        // or its leaderboard entries); a legacy file has no safe record to
+        // justify a win badge, so none is derived.
+        migrated.achievements = derivedTileAchievements(gameBestTile(legacy))
         return migrated
     }
     if (data.version !== VERSION) {

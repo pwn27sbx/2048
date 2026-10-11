@@ -1602,3 +1602,65 @@ test("formatDuration formats mm:ss and h:mm:ss", () => {
   assert.equal(Game.formatDuration(3661000), "1:01:01")
   assert.equal(Game.formatDuration(-5), "0:00")
 })
+
+// --- 31. achievement closure (Unit 16 review fix) -------------------------
+
+test("a win-type achievement needs a 2048 tile in the same game", () => {
+  const near = playing(tiles(4, [[0, 512], [1, 512]]), 4, { moves: 40 })
+  const nearIds = Game.achievementIdsFor(near, Game.emptyStats())
+  assert.ok(nearIds.indexOf("win_no_undo") === -1)
+  assert.ok(nearIds.indexOf("win_swift") === -1)
+  assert.ok(nearIds.indexOf("comeback") === -1)
+  // a crowded non-winning board must not trigger comeback either
+  assert.ok(Game.achievementIdsFor(playing(square(4, 2), 4, { moves: 40 }), Game.emptyStats()).indexOf("comeback") === -1)
+  // a winning board does
+  const wonIds = Game.achievementIdsFor(playing(tiles(4, [[0, 2048]]), 4, { moves: 40 }), Game.emptyStats())
+  assert.ok(wonIds.indexOf("win_no_undo") !== -1)
+  assert.ok(wonIds.indexOf("first2048") !== -1)
+})
+
+test("unlocking a win achievement also unlocks the 2048 tile", () => {
+  const result = Game.evaluateAchievements(Game.emptyProfile(), playing(tiles(4, [[0, 2048]]), 4, { moves: 40 }))
+  assert.ok(result.unlocked.indexOf("win_swift") !== -1)
+  assert.ok(result.unlocked.indexOf("first2048") !== -1, "2048 comes with any win badge")
+  assert.ok(result.unlocked.indexOf("first512") !== -1, "and the lower tiles")
+  assert.ok(result.unlocked.indexOf("first1024") !== -1)
+  assert.ok(result.profile.achievements.indexOf("first2048") !== -1)
+})
+
+test("sanitizeAchievements closes an inconsistent stored set", () => {
+  // the exact shape that was wrong in the Unit 16 screenshot
+  same(Game.sanitizeAchievements(["first512", "first1024", "win_swift", "comeback"]),
+    ["first512", "first1024", "first2048", "win_swift", "comeback"])
+  same(Game.sanitizeAchievements(["first4096"]), ["first512", "first1024", "first2048", "first4096"])
+  same(Game.sanitizeAchievements(["streak5"]), ["first512", "first1024", "first2048", "streak5"])
+  same(Game.sanitizeAchievements(["nope"]), [])
+})
+
+test("migration derives only the tile badges the legacy data proves", () => {
+  const v2 = (maxTile) => JSON.stringify({
+    version: 2, size: 4, cells: new Array(16).fill(0), score: 100, best: 2864, moves: 10,
+    status: "playing", keepPlaying: false,
+    leaderboard: [{ score: 2300, maxTile, moves: 189, endedAt: 1, won: false }]
+  })
+  same(Game.parseProfile(v2(1024)).achievements, ["first512", "first1024"])
+  same(Game.parseProfile(v2(256)).achievements, [], "256 proves no tile badge")
+  same(Game.parseProfile(v2(2048)).achievements, ["first512", "first1024", "first2048"])
+})
+
+test("the owner's real-shaped profile (best 2864, best tile 256) derives no badges", () => {
+  const owner = JSON.stringify({
+    version: 2, size: 4, cells: [0, 0, 0, 2, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    score: 0, best: 2864, moves: 0, status: "playing", keepPlaying: false,
+    startedAt: 1791734347124, recorded: false, lastRank: 3, lastRecordedAt: 1791734346347,
+    leaderboard: [
+      { score: 2300, maxTile: 256, moves: 189, endedAt: 1791600504039, won: false },
+      { score: 2224, maxTile: 256, moves: 186, endedAt: 1791602863738, won: false },
+      { score: 1460, maxTile: 128, moves: 150, endedAt: 1791734346347, won: false },
+      { score: 728, maxTile: 64, moves: 88, endedAt: 1791573032877, won: false }
+    ]
+  })
+  const profile = Game.parseProfile(owner)
+  same(profile.achievements, [], "best tile 256 is below 512")
+  assert.equal(profile.sizes["4"].best, 2864, "best score still preserved")
+})
