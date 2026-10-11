@@ -1164,17 +1164,27 @@ Panel {
 
                 Rectangle {
                   id: undoButton
-                  width: Style.space(30)
-                  height: Style.space(26)
+                  width: Style.space(32)
+                  height: Style.space(32)
                   radius: Style.cornerRadius > 0 ? Style.space(6) : 0
                   opacity: root.canUndo ? 1 : 0.4
                   color: undoMouse.containsMouse && root.canUndo
                     ? Util.alpha(Color.foreground, 0.14)
                     : Util.alpha(Color.foreground, 0.07)
 
+                  // Both header icons use the Nerd Font and are centred by the
+                  // glyph's ink box (Nerd icons sit flush-left in their mono
+                  // advance, so anchors.centerIn alone would bias them right).
+                  TextMetrics {
+                    id: undoTm
+                    font.family: Style.font.family
+                    font.pixelSize: Style.font.icon
+                    text: "\uF0E2"
+                  }
                   Text {
-                    anchors.centerIn: parent
-                    text: "\u21BA"
+                    x: Math.round((parent.width - undoTm.boundingRect.width) / 2 - undoTm.boundingRect.x)
+                    y: Math.round((parent.height - undoTm.boundingRect.height) / 2 - undoTm.boundingRect.y)
+                    text: "\uF0E2"
                     color: Color.foreground
                     font.family: Style.font.family
                     font.pixelSize: Style.font.icon
@@ -1216,16 +1226,23 @@ Panel {
 
                 Rectangle {
                   id: newGameButton
-                  width: Style.space(30)
-                  height: Style.space(26)
+                  width: Style.space(32)
+                  height: Style.space(32)
                   radius: Style.cornerRadius > 0 ? Style.space(6) : 0
                   color: newGameMouse.containsMouse
                     ? Util.alpha(Color.foreground, 0.14)
                     : Util.alpha(Color.foreground, 0.07)
 
+                  TextMetrics {
+                    id: plusTm
+                    font.family: Style.font.family
+                    font.pixelSize: Style.font.icon
+                    text: "\uF067"
+                  }
                   Text {
-                    anchors.centerIn: parent
-                    text: "\uFF0B"
+                    x: Math.round((parent.width - plusTm.boundingRect.width) / 2 - plusTm.boundingRect.x)
+                    y: Math.round((parent.height - plusTm.boundingRect.height) / 2 - plusTm.boundingRect.y)
+                    text: "\uF067"
                     color: Color.foreground
                     font.family: Style.font.family
                     font.pixelSize: Style.font.icon
