@@ -120,6 +120,8 @@ Panel {
   // Inline board-size picker (under the header chip).
   property bool sizePickerOpen: false
   property int sizePickIndex: 0
+  property real sizePickerX: 0
+  property real sizePickerY: 0
   // Motion-gated fade when a tab changes.
   property real pageT: 1
   // True while the score is ahead of (or just beat) the best, for the ▲ mark.
@@ -490,6 +492,12 @@ Panel {
     var index = Game.SUPPORTED_SIZES.indexOf(root.game.size)
     root.sizePickIndex = index === -1 ? 0 : index
     root.sizePickerOpen = true
+    // Anchor to the chip rectangle once layout has settled (a live mapToItem
+    // binding is a one-shot and can be stale by the time the chip is placed).
+    Qt.callLater(function() {
+      root.sizePickerX = sizeChipButton.mapToItem(keyCatcher, 0, 0).x
+      root.sizePickerY = sizeChipButton.mapToItem(keyCatcher, 0, sizeChipButton.height).y
+    })
   }
 
   function closeSizePicker() {
@@ -3220,14 +3228,8 @@ Panel {
         transformOrigin: Item.TopLeft
         width: sizeChipButton.width
         height: sizePickColumn.implicitHeight
-        x: {
-          var p = sizeChipButton.mapToItem(keyCatcher, 0, 0)
-          return Math.max(Style.space(2), Math.min(keyCatcher.width - width - Style.space(2), p.x))
-        }
-        y: {
-          var p = sizeChipButton.mapToItem(keyCatcher, 0, sizeChipButton.height)
-          return Math.max(0, Math.min(keyCatcher.height - height, p.y))
-        }
+        x: root.sizePickerX
+        y: root.sizePickerY
         color: sizeChipButton.color
         radius: sizeChipButton.radius
         border.width: sizeChipButton.border.width
