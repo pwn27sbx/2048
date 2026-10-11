@@ -318,10 +318,10 @@ test("serializeState round-trips through parseState", () => {
   const raw = JSON.parse(text)
   assert.equal(Object.prototype.hasOwnProperty.call(raw, "gain"), false)
   assert.equal(Object.prototype.hasOwnProperty.call(raw, "transitions"), false)
-  assert.equal(raw.version, 2)
+  assert.equal(raw.version, 3)
   const parsed = Game.parseState(text)
   same(parsed, {
-    version: 2,
+    version: 3,
     size: 4,
     cells: state.cells,
     score: 12,
@@ -337,7 +337,10 @@ test("serializeState round-trips through parseState", () => {
     recorded: false,
     lastRank: 0,
     lastRecordedAt: 0,
-    leaderboard: []
+    leaderboard: [],
+    history: [],
+    undoCount: 0,
+    assisted: false
   })
 })
 
@@ -360,7 +363,7 @@ test("parseState rejects every invalid payload with null", () => {
   assert.equal(Game.parseState("not json"), null)
   assert.equal(Game.parseState("x".repeat(65537)), null)
   assert.equal(Game.parseState(raw({ version: 0 })), null)
-  assert.equal(Game.parseState(raw({ version: 3 })), null)
+  assert.equal(Game.parseState(raw({ version: 4 })), null)
   assert.equal(
     Game.parseState(JSON.stringify(Object.assign({}, base, { cells: new Array(15).fill(0) }))),
     null
@@ -655,14 +658,17 @@ test("recorded entries flag won for a 2048 tile", () => {
   assert.equal(small.leaderboard[0].won, false)
 })
 
-test("parseState migrates version 1 to version 2", () => {
+test("parseState migrates version 1 to the current version", () => {
   const v1 = JSON.stringify({ version: 1, size: 4, cells: new Array(16).fill(0), score: 5, best: 5, moves: 2, status: "playing", keepPlaying: false })
   const parsed = Game.parseState(v1)
-  assert.equal(parsed.version, 2)
+  assert.equal(parsed.version, 3)
   assert.equal(parsed.startedAt, 0)
   assert.equal(parsed.recorded, false)
   assert.equal(parsed.lastRank, 0)
   assert.equal(parsed.lastRecordedAt, 0)
+  assert.equal(parsed.undoCount, 0)
+  assert.equal(parsed.assisted, false)
+  same(parsed.history, [])
   same(parsed.leaderboard, [])
 })
 
@@ -790,4 +796,422 @@ test("formatEntryDate formats today, other days and the empty case", () => {
   assert.equal(Game.formatEntryDate(new Date(2025, 9, 9, 14, 35, 0).getTime(), now), "09 Oct")
   // single-digit month handling
   assert.equal(Game.formatEntryDate(new Date(2026, 0, 3, 0, 7, 0).getTime(), now), "03 Jan")
+})
+
+// =========================================================================
+// Phase 5 · Unit 14 — undo and board sizes
+// =========================================================================
+
+function square(size, value) {
+  const cells = []
+  for (let i = 0; i < size * size; i++) cells.push(value)
+  return cells
+}
+
+// A full, playable single-game state for a given size. Mirrors stateWith but
+// carries the v3 undo/profile fields so copyState sees a complete object.
+function playing(cells, size, extra) {
+  return Object.assign(
+    {
+      version: 3,
+      size,
+      cells: cells.slice(),
+      score: 0,
+      best: 0,
+      moves: 0,
+      status: "playing",
+      keepPlaying: false,
+      spawned: -1,
+      merged: [],
+      gain: 0,
+      transitions: [],
+      startedAt: 0,
+      recorded: false,
+      lastRank: 0,
+      lastRecordedAt: 0,
+      leaderboard: [],
+      history: [],
+      undoCount: 0,
+      assisted: false
+    },
+    extra || {}
+  )
+}
+
+function snapshotOf(cells, score, moves) {
+  return { cells: cells.slice(), score, moves, status: "playing", keepPlaying: false }
+}
+
+// --- 20. board sizes (N×N) -----------------------------------------------
+
+test("emptyState builds an N×N board for every supported size", () => {
+  same(Game.SUPPORTED_SIZES, [3, 4, 5, 6, 8])
+  for (const size of Game.SUPPORTED_SIZES) {
+    const state = Game.emptyState(0, size)
+    assert.equal(state.version, 3)
+    assert.equal(state.size, size)
+    assert.equal(state.cells.length, size * size)
+    assert.equal(state.cells.filter((v) => v !== 0).length, 0)
+    assert.equal(state.history.length, 0)
+    assert.equal(state.assisted, false)
+  }
+  assert.equal(Game.emptyState(0).size, 4, "the default size stays 4×4")
+  assert.equal(Game.emptyState(0).cells.length, 16)
+})
+
+test("slideLine works on any line length", () => {
+  const three = Game.slideLine([2, 2, 2])
+  same(three.line, [4, 2, 0])
+  assert.equal(three.gain, 4)
+  const five = Game.slideLine([2, 0, 2, 2, 2])
+  same(five.line, [4, 4, 0, 0, 0])
+  assert.equal(five.gain, 8)
+  same(five.sources, [[0, 2], [3, 4], [], [], []])
+})
+
+test("move left on a 3×3 board merges and spawns", () => {
+  const start = playing([2, 0, 2, 2, 2, 0, 0, 0, 0], 3)
+  const res = Game.move(start, "left", seq(0.5, 0.5))
+  assert.equal(res.moved, true)
+  const cells = res.state.cells.slice()
+  cells[res.state.spawned] = 0
+  same(cells, [4, 0, 0, 4, 0, 0, 0, 0, 0])
+  assert.equal(res.state.score, 8)
+  assert.equal(res.state.size, 3)
+  assert.equal(res.state.history.length, 1)
+  assert.equal(res.state.history[0].score, 0)
+})
+
+test("move up on a 5×5 board fills, merges and reports transitions", () => {
+  const cells = square(5, 0)
+  cells[0] = 2
+  cells[5] = 2
+  const start = playing(cells, 5)
+  const res = Game.move(start, "up", seq(0.5, 0.5))
+  assert.equal(res.moved, true)
+  assert.equal(res.state.cells[0], 4)
+  assert.equal(res.state.score, 4)
+  // both tiles came from the first column and landed on cell 0
+  assert.equal(res.state.transitions.filter((t) => t.to === 0).length, 2)
+})
+
+test("move down on a 6×6 board packs the bottom row", () => {
+  const cells = square(6, 0)
+  // both 2s sit in column 1 (row 0 -> index 1, row 1 -> index 7)
+  cells[1] = 2
+  cells[7] = 2
+  const start = playing(cells, 6)
+  const res = Game.move(start, "down", seq(0.5, 0.5))
+  assert.equal(res.moved, true)
+  assert.equal(res.state.size, 6)
+  assert.equal(res.state.cells[5 * 6 + 1], 4, "column 1 packs and merges at the bottom")
+})
+
+test("an 8×8 board moves and spawns without overflowing its index range", () => {
+  const cells = square(8, 0)
+  cells[0] = 2
+  cells[1] = 2
+  const start = playing(cells, 8)
+  const res = Game.move(start, "left", seq(0.5, 0.5))
+  assert.equal(res.moved, true)
+  assert.equal(res.state.cells.length, 64)
+  assert.equal(res.state.cells[0], 4)
+  assert.ok(res.state.spawned >= 0 && res.state.spawned < 64)
+})
+
+test("canMove understands N×N boards", () => {
+  assert.equal(Game.canMove([2, 4, 2, 4, 2, 4, 2, 4, 2]), false)
+  assert.equal(Game.canMove([2, 4, 2, 4, 2, 4, 2, 4, 0]), true)
+  assert.equal(Game.canMove([2, 2, 4, 8, 16, 32, 64, 128, 256]), true)
+  // 16-cell behaviour is unchanged
+  assert.equal(Game.canMove([2, 4, 2, 4, 4, 2, 4, 2, 2, 4, 2, 4, 4, 2, 4, 2]), false)
+  assert.equal(Game.canMove([2, 4, 2, 4, 4, 2, 4, 2, 2, 4, 2, 4, 4, 2, 4, 0]), true)
+})
+
+test("newGame on a 6×6 board spawns two tiles and keeps best", () => {
+  const game = Game.newGame(7, seq(0, 0.5, 0, 0.5), 1000, [], 6)
+  assert.equal(game.size, 6)
+  assert.equal(game.cells.length, 36)
+  assert.equal(game.cells.filter((v) => v !== 0).length, 2)
+  assert.equal(game.best, 7)
+  assert.equal(game.startedAt, 1000)
+})
+
+test("startNewGame stays on its own board size", () => {
+  const state = playing([2, 2, 0, 0, 0, 0, 0, 0, 0], 3, { score: 4, best: 9, moves: 1 })
+  const next = Game.startNewGame(state, seq(0, 0.5, 0, 0.5), 5000)
+  assert.equal(next.size, 3)
+  assert.equal(next.cells.length, 9)
+  assert.equal(next.best, 9)
+  assert.equal(next.history.length, 0)
+})
+
+test("parseState rejects an unsupported board size", () => {
+  const base = {
+    version: 3,
+    size: 7,
+    cells: square(7, 0),
+    score: 0,
+    best: 0,
+    moves: 0,
+    status: "playing",
+    keepPlaying: false
+  }
+  assert.equal(Game.parseState(JSON.stringify(base)), null)
+  assert.equal(Game.parseState(JSON.stringify(Object.assign({}, base, { size: 4, cells: square(4, 0) }))) !== null, true)
+})
+
+// --- 21. undo ring --------------------------------------------------------
+
+test("defaultSettings returns the documented defaults", () => {
+  same(Game.defaultSettings(), { allowUndo: true, undoLimit: "unlimited" })
+  same(Game.sanitizeSettings(null), { allowUndo: true, undoLimit: "unlimited" })
+  same(Game.sanitizeSettings({ allowUndo: false, undoLimit: 3 }), { allowUndo: false, undoLimit: 3 })
+  same(Game.sanitizeSettings({ allowUndo: "yes", undoLimit: 5 }), { allowUndo: true, undoLimit: "unlimited" })
+})
+
+test("pushHistory keeps the last 50 snapshots (ring bound)", () => {
+  assert.equal(Game.UNDO_RING, 50)
+  let history = []
+  for (let i = 0; i < 60; i++) {
+    history = Game.pushHistory(history, snapshotOf([i, 0, 0, 0], i, i))
+  }
+  assert.equal(history.length, 50)
+  assert.equal(history[0].score, 10, "the oldest ten were dropped")
+  assert.equal(history[49].score, 59, "the newest snapshot is at the end")
+})
+
+test("undo restores the board, score and moves and marks the game assisted", () => {
+  const start = playing([2, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], 4)
+  const moved = Game.move(start, "left", seq(0.5, 0.5))
+  assert.equal(moved.moved, true)
+  assert.equal(moved.state.history.length, 1)
+  const back = Game.undo(moved.state, Game.defaultSettings())
+  assert.equal(back.undone, true)
+  same(back.state.cells, start.cells)
+  assert.equal(back.state.score, start.score)
+  assert.equal(back.state.moves, start.moves)
+  assert.equal(back.state.assisted, true)
+  assert.equal(back.state.undoCount, 1)
+  assert.equal(back.state.history.length, 0)
+})
+
+test("undo is a no-op on an empty history and never mutates its input", () => {
+  const start = playing(square(4, 0), 4)
+  const before = JSON.stringify(start)
+  const result = Game.undo(start, Game.defaultSettings())
+  assert.equal(result.undone, false)
+  same(result.state.cells, start.cells)
+  assert.equal(JSON.stringify(start), before)
+})
+
+test("undo honours Allow undo and the 3-per-game limit", () => {
+  const st = playing(square(4, 0), 4, {
+    score: 12,
+    moves: 3,
+    history: [
+      snapshotOf(square(4, 0), 0, 0),
+      snapshotOf(square(4, 0), 4, 1),
+      snapshotOf(square(4, 0), 8, 2)
+    ]
+  })
+  assert.equal(Game.undo(st, { allowUndo: false, undoLimit: "unlimited" }).undone, false)
+  let current = st
+  for (let i = 0; i < 3; i++) {
+    const step = Game.undo(current, { allowUndo: true, undoLimit: 3 })
+    assert.equal(step.undone, true, `undo ${i + 1} allowed`)
+    current = step.state
+  }
+  assert.equal(current.undoCount, 3)
+  const blocked = Game.undo(current, { allowUndo: true, undoLimit: 3 })
+  assert.equal(blocked.undone, false, "the fourth undo is blocked")
+})
+
+test("canUndo reflects history, the setting and the limit", () => {
+  const one = { history: [snapshotOf(square(4, 0), 0, 0)] }
+  assert.equal(Game.canUndo(playing(square(4, 0), 4, one), Game.defaultSettings()), true)
+  assert.equal(Game.canUndo(playing(square(4, 0), 4, one), { allowUndo: false, undoLimit: "unlimited" }), false)
+  assert.equal(Game.canUndo(playing(square(4, 0), 4), Game.defaultSettings()), false)
+  assert.equal(Game.canUndo(playing(square(4, 0), 4, { history: one.history, undoCount: 2 }), { allowUndo: true, undoLimit: 3 }), true)
+  assert.equal(Game.canUndo(playing(square(4, 0), 4, { history: one.history, undoCount: 3 }), { allowUndo: true, undoLimit: 3 }), false)
+})
+
+test("undo out of a game over un-records the game and returns to playing", () => {
+  const start = playing([8, 16, 32, 0, 8, 16, 32, 64, 16, 32, 64, 128, 32, 64, 128, 256], 4, {
+    score: 300,
+    moves: 10
+  })
+  const ended = Game.move(start, "right", seq(0.5, 0.5), 7000)
+  assert.equal(ended.state.status, "over")
+  assert.equal(ended.state.recorded, true)
+  assert.equal(ended.state.leaderboard.length, 1)
+  const back = Game.undo(ended.state, Game.defaultSettings())
+  assert.equal(back.undone, true)
+  assert.equal(back.state.status, "playing")
+  assert.equal(back.state.recorded, false)
+  assert.equal(back.state.lastRecordedAt, 0)
+  assert.equal(back.state.lastRank, 0)
+  same(back.state.leaderboard, [], "the recorded entry is removed")
+  assert.equal(back.state.best, 300, "best stays at the value that was earned")
+})
+
+test("undo out of the win card returns to before the winning move", () => {
+  const start = playing([1024, 1024, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], 4)
+  const won = Game.move(start, "left", seq(0.5, 0.5))
+  assert.equal(won.state.status, "won")
+  const back = Game.undo(won.state, Game.defaultSettings())
+  assert.equal(back.undone, true)
+  assert.equal(back.state.status, "playing")
+  assert.equal(back.state.cells[0], 1024)
+  assert.equal(back.state.assisted, true)
+})
+
+test("an assisted game never records to the leaderboard", () => {
+  const start = playing([8, 16, 32, 0, 8, 16, 32, 64, 16, 32, 64, 128, 32, 64, 128, 256], 4, {
+    score: 300,
+    moves: 10,
+    assisted: true
+  })
+  const ended = Game.move(start, "right", seq(0.5, 0.5), 7000)
+  assert.equal(ended.state.status, "over")
+  assert.equal(ended.state.recorded, false)
+  assert.equal(ended.state.leaderboard.length, 0)
+})
+
+test("startNewGame resets the undo history and the assisted flag", () => {
+  const state = playing([2, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], 4, {
+    score: 12,
+    best: 50,
+    moves: 3,
+    history: [snapshotOf(square(4, 0), 0, 0)],
+    assisted: true,
+    undoCount: 2
+  })
+  const next = Game.startNewGame(state, seq(0, 0.5, 0, 0.5), 5000)
+  assert.equal(next.history.length, 0)
+  assert.equal(next.assisted, false)
+  assert.equal(next.undoCount, 0)
+  assert.equal(next.best, 50)
+})
+
+test("tileFontFactor shrinks with the board size and digit count", () => {
+  assert.ok(Game.tileFontFactor(2, 4) > Game.tileFontFactor(2, 8))
+  assert.ok(Game.tileFontFactor(2, 4) > Game.tileFontFactor(131072, 4))
+  assert.ok(Game.tileFontFactor(131072, 8) > 0)
+  assert.equal(Game.tileFontFactor(2, 3) > Game.tileFontFactor(2, 4), true)
+})
+
+// --- 22. profile persistence and migration --------------------------------
+
+test("emptyProfile carries every supported size and default settings", () => {
+  const profile = Game.emptyProfile()
+  assert.equal(profile.version, 3)
+  assert.equal(profile.activeSize, 4)
+  same(profile.settings, { allowUndo: true, undoLimit: "unlimited" })
+  for (const size of Game.SUPPORTED_SIZES) {
+    const game = profile.sizes[String(size)]
+    assert.equal(game.size, size)
+    assert.equal(game.cells.length, size * size)
+    same(game.leaderboard, [])
+  }
+})
+
+test("setActiveSize/cycleSize switch boards and wrap around", () => {
+  const profile = Game.emptyProfile()
+  const eight = Game.setActiveSize(profile, 8)
+  assert.equal(eight.activeSize, 8)
+  assert.equal(Game.activeGame(eight).size, 8)
+  assert.equal(Game.cycleSize(8, 1), 3, "wraps forward 8 -> 3")
+  assert.equal(Game.cycleSize(3, -1), 8, "wraps back 3 -> 8")
+  assert.equal(Game.cycleSize(4, 1), 5)
+  assert.equal(Game.setActiveSize(profile, 7).activeSize, 4, "unsupported size is ignored")
+})
+
+test("setGame replaces only the matching size and keeps the rest", () => {
+  const profile = Game.emptyProfile()
+  const big = Game.newGame(0, seq(0, 0.5, 0, 0.5), 100, [], 8)
+  const next = Game.setGame(profile, big)
+  assert.equal(next.sizes["8"].cells.length, 64)
+  assert.equal(next.sizes["4"].cells.length, 16)
+  assert.equal(next.activeSize, 4, "setGame does not change the active size")
+})
+
+test("serializeProfile round-trips the active game, history and settings", () => {
+  let profile = Game.emptyProfile()
+  const start = playing([2, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], 4)
+  const moved = Game.move(start, "left", seq(0.5, 0.5))
+  profile = Game.setGame(profile, moved.state)
+  profile = Game.updateSettings(profile, { undoLimit: 3 })
+  const text = Game.serializeProfile(profile)
+  const back = Game.parseProfile(text)
+  assert.equal(back.activeSize, 4)
+  same(back.settings, { allowUndo: true, undoLimit: 3 })
+  const game = Game.activeGame(back)
+  same(game.cells, moved.state.cells)
+  assert.equal(game.best, moved.state.best)
+  assert.equal(game.history.length, 1)
+})
+
+test("parseProfile migrates a version 2 single game losslessly", () => {
+  const v2 = JSON.stringify({
+    version: 2,
+    size: 4,
+    cells: [0, 0, 0, 2, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    score: 0,
+    best: 2864,
+    moves: 0,
+    status: "playing",
+    keepPlaying: false,
+    startedAt: 1791734347124,
+    recorded: false,
+    lastRank: 3,
+    lastRecordedAt: 1791734346347,
+    leaderboard: [
+      { score: 2300, maxTile: 256, moves: 189, endedAt: 1791600504039, won: false },
+      { score: 2224, maxTile: 256, moves: 186, endedAt: 1791602863738, won: false }
+    ]
+  })
+  const profile = Game.parseProfile(v2)
+  assert.equal(profile.activeSize, 4)
+  const game = profile.sizes["4"]
+  assert.equal(game.best, 2864)
+  assert.equal(game.startedAt, 1791734347124)
+  assert.equal(game.leaderboard.length, 2)
+  assert.equal(game.leaderboard[0].score, 2300)
+  assert.equal(profile.sizes["3"].cells.length, 9, "every other size is a fresh board")
+})
+
+test("parseProfile migrates a version 1 single game", () => {
+  const v1 = JSON.stringify({ version: 1, size: 4, cells: square(4, 0), score: 5, best: 5, moves: 2, status: "playing", keepPlaying: false })
+  const profile = Game.parseProfile(v1)
+  assert.equal(profile.sizes["4"].best, 5)
+  assert.equal(profile.sizes["4"].startedAt, 0)
+})
+
+test("parseProfile rejects garbage, oversize text and a v3 object with no sizes", () => {
+  assert.equal(Game.parseProfile(""), null)
+  assert.equal(Game.parseProfile("not json"), null)
+  assert.equal(Game.parseProfile("x".repeat(65537)), null)
+  assert.equal(Game.parseProfile(JSON.stringify({ version: 3 })), null)
+})
+
+test("serializeProfile stays under MAX_STATE_BYTES for worst-case content", () => {
+  let profile = Game.emptyProfile()
+  for (const size of Game.SUPPORTED_SIZES) {
+    const cells = square(size, 131072)
+    const history = []
+    for (let i = 0; i < 50; i++) history.push(snapshotOf(cells, 1e9, 1e6))
+    const leaderboard = []
+    for (let i = 0; i < 10; i++) leaderboard.push({ score: 1e9 - i, maxTile: 131072, moves: 1e6, endedAt: 1e13 - i, won: true })
+    profile = Game.setGame(profile, {
+      version: 3, size, cells, score: 1e9, best: 1e9, moves: 1e6, status: "playing",
+      keepPlaying: false, startedAt: 1e13, recorded: false, lastRank: 0, lastRecordedAt: 0,
+      leaderboard, history, undoCount: 0, assisted: false
+    })
+  }
+  const text = Game.serializeProfile(profile)
+  assert.ok(text.length <= 65536, `serialized ${text.length} chars, cap 65536`)
+  const back = Game.parseProfile(text)
+  assert.equal(back.sizes["8"].best, 1e9, "the board survived the trim")
+  assert.equal(back.sizes["8"].leaderboard.length, 10, "the leaderboard survived the trim")
 })

@@ -1,9 +1,19 @@
 .pragma library
 
-var VERSION = 2
+var VERSION = 3
 var SIZE = 4
+// Board sizes the player can pick with `[` / `]` or the header badge. 4×4 is
+// the default and the size every legacy state file was written for.
+var SUPPORTED_SIZES = [3, 4, 5, 6, 8]
+// Undo is a ring of the last 50 pre-move snapshots; the challenge setting caps
+// how many undos a single game may use.
+var UNDO_RING = 50
+var UNDO_CHALLENGE_LIMIT = 3
+var UNDO_UNLIMITED = "unlimited"
 var WIN_VALUE = 2048
 var MAX_STATE_BYTES = 65536
+// Keep profile writes a little under the helper's hard 64 KiB cap.
+var SERIALIZE_LIMIT = MAX_STATE_BYTES - 512
 var LEADERBOARD_SIZE = 10
 var STATUS_PLAYING = "playing"
 var STATUS_WON = "won"
@@ -27,21 +37,43 @@ var PALETTE = [
     { base: "urgent", alpha: 1.0, solid: true }   // 11 2048+
 ]
 
-function emptyState(best) {
-    var n = Number(best)
-    if (!isFinite(n)) {
-        n = 0
+// True for a board size the game supports (3, 4, 5, 6, 8).
+function isSupportedSize(size) {
+    return SUPPORTED_SIZES.indexOf(Number(size)) !== -1
+}
+
+// Recover the board size from a flat cell count; 0 when not a perfect square.
+function sqrtSize(count) {
+    var n = Math.round(Math.sqrt(count))
+    return n > 0 && n * n === count ? n : 0
+}
+
+// A fresh board of `size`×`size` empty cells (defaults to the 4×4 SIZE).
+function emptyCells(size) {
+    var n = isSupportedSize(size) ? Number(size) : SIZE
+    var cells = []
+    for (var i = 0; i < n * n; i++) {
+        cells.push(0)
     }
-    n = Math.floor(n)
-    if (n < 0) {
-        n = 0
+    return cells
+}
+
+function emptyState(best, size) {
+    var n = isSupportedSize(size) ? Number(size) : SIZE
+    var value = Number(best)
+    if (!isFinite(value)) {
+        value = 0
+    }
+    value = Math.floor(value)
+    if (value < 0) {
+        value = 0
     }
     return {
         version: VERSION,
-        size: SIZE,
-        cells: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        size: n,
+        cells: emptyCells(n),
         score: 0,
-        best: n,
+        best: value,
         moves: 0,
         status: STATUS_PLAYING,
         keepPlaying: false,
@@ -53,7 +85,10 @@ function emptyState(best) {
         recorded: false,
         lastRank: 0,
         lastRecordedAt: 0,
-        leaderboard: []
+        leaderboard: [],
+        history: [],
+        undoCount: 0,
+        assisted: false
     }
 }
 
@@ -77,8 +112,62 @@ function copyState(state) {
         recorded: state.recorded === true,
         lastRank: state.lastRank || 0,
         lastRecordedAt: state.lastRecordedAt || 0,
-        leaderboard: (state.leaderboard || []).slice()
+        leaderboard: (state.leaderboard || []).slice(),
+        history: copyHistory(state.history),
+        undoCount: normalizeCount(state.undoCount),
+        assisted: state.assisted === true
     }
+}
+
+function normalizeCount(value) {
+    var n = Number(value)
+    if (!isFinite(n) || n < 0) return 0
+    return Math.floor(n)
+}
+
+// One undo snapshot: only what `undo` restores (cells, score, moves and the
+// status flags). Transient animation fields are never stored.
+function snapshot(state) {
+    return {
+        cells: state.cells.slice(),
+        score: state.score,
+        moves: state.moves,
+        status: state.status,
+        keepPlaying: state.keepPlaying === true
+    }
+}
+
+function copySnapshot(snap) {
+    if (!snap || typeof snap !== "object" || !Array.isArray(snap.cells)) {
+        return { cells: [], score: 0, moves: 0, status: STATUS_PLAYING, keepPlaying: false }
+    }
+    return {
+        cells: snap.cells.slice(),
+        score: normalizeCount(snap.score),
+        moves: normalizeCount(snap.moves),
+        status: snap.status,
+        keepPlaying: snap.keepPlaying === true
+    }
+}
+
+function copyHistory(history) {
+    var list = []
+    if (Array.isArray(history)) {
+        for (var i = 0; i < history.length; i++) {
+            list.push(copySnapshot(history[i]))
+        }
+    }
+    return list
+}
+
+// Append a snapshot and keep only the newest UNDO_RING entries (oldest drop).
+function pushHistory(history, snap) {
+    var list = Array.isArray(history) ? history.slice() : []
+    list.push(snap)
+    if (list.length > UNDO_RING) {
+        list = list.slice(list.length - UNDO_RING)
+    }
+    return list
 }
 
 function normalizeMs(value) {
@@ -87,8 +176,8 @@ function normalizeMs(value) {
     return Math.floor(n)
 }
 
-function newGame(best, rng, now, leaderboard) {
-    var state = emptyState(best)
+function newGame(best, rng, now, leaderboard, size) {
+    var state = emptyState(best, size)
     state.startedAt = normalizeMs(now)
     state.leaderboard = Array.isArray(leaderboard) ? leaderboard.slice() : []
     state = spawn(state, rng)
@@ -96,11 +185,13 @@ function newGame(best, rng, now, leaderboard) {
     return state
 }
 
+// Slide one row/column of any length toward index 0 (left / up semantics).
 function slideLine(line) {
+    var n = line.length
     var kept = []
     var positions = []
     var i
-    for (i = 0; i < 4; i++) {
+    for (i = 0; i < n; i++) {
         if (line[i] !== 0) {
             kept.push(line[i])
             positions.push(i)
@@ -125,7 +216,7 @@ function slideLine(line) {
             i += 1
         }
     }
-    while (out.length < 4) {
+    while (out.length < n) {
         out.push(0)
         sources.push([])
     }
@@ -142,6 +233,9 @@ function move(state, direction, rng, now) {
             valid = true
         }
     }
+
+    var n = isSupportedSize(state.size) ? state.size : SIZE
+    var last = n - 1
 
     var copy = copyState(state)
     copy.gain = 0
@@ -163,30 +257,30 @@ function move(state, direction, rng, now) {
     var target
     var pos
 
-    for (i = 0; i < 4; i++) {
+    for (i = 0; i < n; i++) {
         line = []
-        for (j = 0; j < 4; j++) {
+        for (j = 0; j < n; j++) {
             if (direction === "left") {
-                line.push(cells[i * 4 + j])
+                line.push(cells[i * n + j])
             } else if (direction === "right") {
-                line.push(cells[i * 4 + (3 - j)])
+                line.push(cells[i * n + (last - j)])
             } else if (direction === "up") {
-                line.push(cells[j * 4 + i])
+                line.push(cells[j * n + i])
             } else {
-                line.push(cells[(3 - j) * 4 + i])
+                line.push(cells[(last - j) * n + i])
             }
         }
         result = slideLine(line)
         gain += result.gain
-        for (j = 0; j < 4; j++) {
+        for (j = 0; j < n; j++) {
             if (direction === "left") {
-                target = i * 4 + j
+                target = i * n + j
             } else if (direction === "right") {
-                target = i * 4 + (3 - j)
+                target = i * n + (last - j)
             } else if (direction === "up") {
-                target = j * 4 + i
+                target = j * n + i
             } else {
-                target = (3 - j) * 4 + i
+                target = (last - j) * n + i
             }
             if (cells[target] !== result.line[j]) {
                 moved = true
@@ -196,34 +290,34 @@ function move(state, direction, rng, now) {
         for (j = 0; j < result.mergedAt.length; j++) {
             pos = result.mergedAt[j]
             if (direction === "left") {
-                merged.push(i * 4 + pos)
+                merged.push(i * n + pos)
             } else if (direction === "right") {
-                merged.push(i * 4 + (3 - pos))
+                merged.push(i * n + (last - pos))
             } else if (direction === "up") {
-                merged.push(pos * 4 + i)
+                merged.push(pos * n + i)
             } else {
-                merged.push((3 - pos) * 4 + i)
+                merged.push((last - pos) * n + i)
             }
         }
         // One transition per pre-move tile: where it came from, where it ended,
         // and its value before the move (same direction mapping as `merged`).
-        for (j = 0; j < 4; j++) {
+        for (j = 0; j < n; j++) {
             for (k = 0; k < result.sources[j].length; k++) {
                 var srcPos = result.sources[j][k]
                 var fromIndex
                 var toIndex
                 if (direction === "left") {
-                    fromIndex = i * 4 + srcPos
-                    toIndex = i * 4 + j
+                    fromIndex = i * n + srcPos
+                    toIndex = i * n + j
                 } else if (direction === "right") {
-                    fromIndex = i * 4 + (3 - srcPos)
-                    toIndex = i * 4 + (3 - j)
+                    fromIndex = i * n + (last - srcPos)
+                    toIndex = i * n + (last - j)
                 } else if (direction === "up") {
-                    fromIndex = srcPos * 4 + i
-                    toIndex = j * 4 + i
+                    fromIndex = srcPos * n + i
+                    toIndex = j * n + i
                 } else {
-                    fromIndex = (3 - srcPos) * 4 + i
-                    toIndex = (3 - j) * 4 + i
+                    fromIndex = (last - srcPos) * n + i
+                    toIndex = (last - j) * n + i
                 }
                 transitions.push({ from: fromIndex, to: toIndex, value: state.cells[fromIndex] })
             }
@@ -249,6 +343,8 @@ function move(state, direction, rng, now) {
     next.merged = merged
     next.gain = gain
     next.transitions = transitions
+    // Record the pre-move board so `undo` can restore it (ring-capped).
+    next.history = pushHistory(state.history, snapshot(state))
     next = spawn(next, rng)
     var status = next.status
     if (!next.keepPlaying && hasValueAtLeast(next.cells, WIN_VALUE)) {
@@ -289,21 +385,25 @@ function spawn(state, rng) {
 }
 
 function canMove(cells) {
+    var n = sqrtSize(cells.length)
+    if (n === 0) {
+        return false
+    }
     var i
-    for (i = 0; i < 16; i++) {
+    for (i = 0; i < cells.length; i++) {
         if (cells[i] === 0) {
             return true
         }
     }
     var r
     var c
-    for (r = 0; r < 4; r++) {
-        for (c = 0; c < 4; c++) {
-            var value = cells[r * 4 + c]
-            if (c < 3 && value === cells[r * 4 + c + 1]) {
+    for (r = 0; r < n; r++) {
+        for (c = 0; c < n; c++) {
+            var value = cells[r * n + c]
+            if (c < n - 1 && value === cells[r * n + c + 1]) {
                 return true
             }
-            if (r < 3 && value === cells[(r + 1) * 4 + c]) {
+            if (r < n - 1 && value === cells[(r + 1) * n + c]) {
                 return true
             }
         }
@@ -350,6 +450,18 @@ function tileLevel(value) {
     return level
 }
 
+// Multiplier for the tile label font: fewer pixels as the board grows and as
+// the number gains digits, so text never overflows its cell. QML multiplies
+// Style.font.title by this.
+function tileFontFactor(value, size) {
+    var n = isSupportedSize(size) ? Number(size) : SIZE
+    var number = Number(value)
+    if (!isFinite(number) || number < 0) number = 0
+    var digits = String(Math.floor(number)).length
+    var byDigits = digits <= 2 ? 1.6 : digits === 3 ? 1.3 : digits === 4 ? 1.05 : 0.85
+    return byDigits * (4 / n)
+}
+
 function keepGoing(state) {
     var next = copyState(state)
     if (state.status === STATUS_WON) {
@@ -359,8 +471,10 @@ function keepGoing(state) {
     return next
 }
 
-function serializeState(state) {
-    return JSON.stringify({
+// The wire shape of one game (shared by serializeState and the profile).
+// `includeHistory` is false for non-active boards to keep writes smaller.
+function gameToJson(state, includeHistory) {
+    return {
         version: VERSION,
         size: state.size,
         cells: state.cells,
@@ -373,37 +487,97 @@ function serializeState(state) {
         recorded: state.recorded === true,
         lastRank: state.lastRank || 0,
         lastRecordedAt: normalizeMs(state.lastRecordedAt),
-        leaderboard: state.leaderboard || []
-    })
+        leaderboard: state.leaderboard || [],
+        history: includeHistory === false ? [] : copyHistory(state.history),
+        undoCount: normalizeCount(state.undoCount),
+        assisted: state.assisted === true
+    }
 }
 
-function parseState(text) {
-    if (typeof text !== "string") {
-        return null
+function serializeState(state) {
+    return JSON.stringify(gameToJson(state, true))
+}
+
+// Keep only individually valid leaderboard entries, sorted and truncated.
+function sanitizeLeaderboard(raw) {
+    var leaderboard = []
+    if (Array.isArray(raw)) {
+        for (var i = 0; i < raw.length; i++) {
+            var clean = sanitizeEntry(raw[i])
+            if (clean) {
+                leaderboard.push(clean)
+            }
+        }
+        leaderboard.sort(compareEntries)
+        if (leaderboard.length > LEADERBOARD_SIZE) {
+            leaderboard = leaderboard.slice(0, LEADERBOARD_SIZE)
+        }
     }
-    if (text.length === 0 || text.length > MAX_STATE_BYTES) {
-        return null
+    return leaderboard
+}
+
+// Keep only snapshots whose board matches this size and whose numbers/status
+// are valid; cap the ring like pushHistory does.
+function sanitizeHistory(raw, size) {
+    var list = []
+    if (!Array.isArray(raw)) {
+        return list
     }
-    var data
-    try {
-        data = JSON.parse(text)
-    } catch (error) {
-        return null
+    var count = size * size
+    for (var i = 0; i < raw.length; i++) {
+        var snap = raw[i]
+        if (!snap || typeof snap !== "object") {
+            continue
+        }
+        if (!Array.isArray(snap.cells) || snap.cells.length !== count) {
+            continue
+        }
+        var ok = true
+        for (var c = 0; c < count; c++) {
+            if (!isPowerOfTwoOrZero(snap.cells[c])) {
+                ok = false
+                break
+            }
+        }
+        if (!ok) continue
+        if (!isIntIn(snap.score, 0, 1e9) || !isIntIn(snap.moves, 0, 1e9)) continue
+        if (
+            snap.status !== STATUS_PLAYING &&
+            snap.status !== STATUS_WON &&
+            snap.status !== STATUS_OVER
+        ) continue
+        list.push({
+            cells: snap.cells.slice(),
+            score: snap.score,
+            moves: snap.moves,
+            status: snap.status,
+            keepPlaying: snap.keepPlaying === true
+        })
     }
+    if (list.length > UNDO_RING) {
+        list = list.slice(list.length - UNDO_RING)
+    }
+    return list
+}
+
+// Validate one already-parsed game object (any version) into a v3 state.
+function parseGameObject(data) {
     if (!data || typeof data !== "object") {
         return null
     }
-    if (data.version !== 1 && data.version !== 2) {
+    if (data.version !== 1 && data.version !== 2 && data.version !== VERSION) {
         return null
     }
-    if (data.size !== SIZE) {
+    if (!isSupportedSize(data.size)) {
         return null
     }
-    if (!Array.isArray(data.cells) || data.cells.length !== 16) {
+    var size = Number(data.size)
+    var count = size * size
+    if (!Array.isArray(data.cells) || data.cells.length !== count) {
         return null
     }
     var i
-    for (i = 0; i < 16; i++) {
+    for (i = 0; i < count; i++) {
         var cell = data.cells[i]
         if (cell === 0) {
             continue
@@ -447,26 +621,14 @@ function parseState(text) {
     if (data.score > best) {
         best = data.score
     }
-    // Leaderboard: keep only individually valid entries, sorted and truncated.
-    var leaderboard = []
-    if (Array.isArray(data.leaderboard)) {
-        for (var li = 0; li < data.leaderboard.length; li++) {
-            var clean = sanitizeEntry(data.leaderboard[li])
-            if (clean) {
-                leaderboard.push(clean)
-            }
-        }
-        leaderboard.sort(compareEntries)
-        if (leaderboard.length > LEADERBOARD_SIZE) {
-            leaderboard = leaderboard.slice(0, LEADERBOARD_SIZE)
-        }
-    }
+    var leaderboard = sanitizeLeaderboard(data.leaderboard)
     if (leaderboard.length > 0 && leaderboard[0].score > best) {
         best = leaderboard[0].score
     }
+    var legacy = data.version === 1
     return {
         version: VERSION,
-        size: SIZE,
+        size: size,
         cells: data.cells.slice(),
         score: data.score,
         best: best,
@@ -477,13 +639,32 @@ function parseState(text) {
         merged: [],
         gain: 0,
         transitions: [],
-        // Version 1 has none of these: migrate to the v2 defaults.
-        startedAt: data.version === 2 ? normalizeMs(data.startedAt) : 0,
-        recorded: data.version === 2 && data.recorded === true,
-        lastRank: data.version === 2 && isRank(data.lastRank) ? data.lastRank : 0,
-        lastRecordedAt: data.version === 2 ? normalizeMs(data.lastRecordedAt) : 0,
-        leaderboard: leaderboard
+        // Version 1 has none of these: migrate to the current defaults.
+        startedAt: legacy ? 0 : normalizeMs(data.startedAt),
+        recorded: !legacy && data.recorded === true,
+        lastRank: !legacy && isRank(data.lastRank) ? data.lastRank : 0,
+        lastRecordedAt: legacy ? 0 : normalizeMs(data.lastRecordedAt),
+        leaderboard: leaderboard,
+        history: sanitizeHistory(data.history, size),
+        undoCount: normalizeCount(data.undoCount),
+        assisted: data.assisted === true
     }
+}
+
+function parseState(text) {
+    if (typeof text !== "string") {
+        return null
+    }
+    if (text.length === 0 || text.length > MAX_STATE_BYTES) {
+        return null
+    }
+    var data
+    try {
+        data = JSON.parse(text)
+    } catch (error) {
+        return null
+    }
+    return parseGameObject(data)
 }
 
 // --- local leaderboard (§5.2) ---------------------------------------------
@@ -552,10 +733,11 @@ function insertEntry(leaderboard, entry) {
     return { leaderboard: list, rank: rank }
 }
 
-// Record the current game once. No-op copy when already recorded or score 0.
+// Record the current game once. No-op copy when already recorded, when the
+// score is 0, or when the game used undo (an assisted game never counts).
 function recordGame(state, now) {
     var copy = copyState(state)
-    if (state.recorded === true || state.score === 0) {
+    if (state.recorded === true || state.score === 0 || state.assisted === true) {
         return copy
     }
     var top = maxTile(state.cells)
@@ -584,10 +766,257 @@ function recordGame(state, now) {
 // itself is not flagged as recorded.
 function startNewGame(state, rng, now) {
     var recorded = recordGame(state, now)
-    var next = newGame(recorded.best, rng, now, recorded.leaderboard)
+    var next = newGame(recorded.best, rng, now, recorded.leaderboard, state.size)
     next.lastRank = recorded.lastRank
     next.lastRecordedAt = recorded.lastRecordedAt
     return next
+}
+
+// --- settings, profiles and undo (Phase 5 · Unit 14) ----------------------
+
+function defaultSettings() {
+    return { allowUndo: true, undoLimit: UNDO_UNLIMITED }
+}
+
+// Clamp arbitrary input to the known settings shape. A missing Allow undo is
+// on; any Undo limit other than the challenge value is unlimited.
+function sanitizeSettings(raw) {
+    var source = raw && typeof raw === "object" ? raw : {}
+    var limit = source.undoLimit === UNDO_CHALLENGE_LIMIT || source.undoLimit === String(UNDO_CHALLENGE_LIMIT)
+        ? UNDO_CHALLENGE_LIMIT
+        : UNDO_UNLIMITED
+    return { allowUndo: source.allowUndo !== false, undoLimit: limit }
+}
+
+function mergeSettings(current, patch) {
+    var base = sanitizeSettings(current)
+    var source = patch && typeof patch === "object" ? patch : {}
+    return sanitizeSettings({
+        allowUndo: "allowUndo" in source ? source.allowUndo : base.allowUndo,
+        undoLimit: "undoLimit" in source ? source.undoLimit : base.undoLimit
+    })
+}
+
+// Every supported size gets its own board, best and leaderboard. Settings are
+// shared by the whole profile.
+function emptyProfile() {
+    var sizes = {}
+    for (var i = 0; i < SUPPORTED_SIZES.length; i++) {
+        var size = SUPPORTED_SIZES[i]
+        sizes[String(size)] = emptyState(0, size)
+    }
+    return { version: VERSION, activeSize: SIZE, settings: defaultSettings(), sizes: sizes }
+}
+
+function copyProfile(profile) {
+    var sizes = {}
+    for (var i = 0; i < SUPPORTED_SIZES.length; i++) {
+        var size = SUPPORTED_SIZES[i]
+        var key = String(size)
+        var game = profile && profile.sizes ? profile.sizes[key] : null
+        sizes[key] = game ? copyState(game) : emptyState(0, size)
+    }
+    return {
+        version: VERSION,
+        activeSize: profile && isSupportedSize(profile.activeSize) ? Number(profile.activeSize) : SIZE,
+        settings: sanitizeSettings(profile ? profile.settings : null),
+        sizes: sizes
+    }
+}
+
+function activeGame(profile) {
+    if (!profile || !profile.sizes) {
+        return emptyState(0, SIZE)
+    }
+    return profile.sizes[String(profile.activeSize)] || emptyState(0, profile.activeSize)
+}
+
+// Replace one board in the profile, leaving the active size untouched.
+function setGame(profile, game) {
+    var next = copyProfile(profile)
+    if (game && isSupportedSize(game.size)) {
+        next.sizes[String(game.size)] = copyState(game)
+    }
+    return next
+}
+
+function setActiveSize(profile, size) {
+    var next = copyProfile(profile)
+    if (isSupportedSize(size)) {
+        next.activeSize = Number(size)
+    }
+    return next
+}
+
+// Next supported size in `step` direction, wrapping around.
+function cycleSize(size, step) {
+    var n = isSupportedSize(size) ? Number(size) : SIZE
+    var dir = Number(step) < 0 ? -1 : 1
+    var index = SUPPORTED_SIZES.indexOf(n)
+    if (index === -1) {
+        index = SUPPORTED_SIZES.indexOf(SIZE)
+    }
+    return SUPPORTED_SIZES[(index + dir + SUPPORTED_SIZES.length) % SUPPORTED_SIZES.length]
+}
+
+function updateSettings(profile, patch) {
+    var next = copyProfile(profile)
+    next.settings = mergeSettings(next.settings, patch)
+    return next
+}
+
+// Undo is available only with a snapshot left, Allow undo on and the challenge
+// limit not yet reached.
+function canUndo(state, settings) {
+    if (!state) {
+        return false
+    }
+    var opts = sanitizeSettings(settings)
+    if (!opts.allowUndo) {
+        return false
+    }
+    if (opts.undoLimit === UNDO_CHALLENGE_LIMIT && normalizeCount(state.undoCount) >= UNDO_CHALLENGE_LIMIT) {
+        return false
+    }
+    return Array.isArray(state.history) && state.history.length > 0
+}
+
+// Drop the entry a game just recorded, matched by its score and timestamp.
+function removeLeaderboardEntry(leaderboard, score, endedAt) {
+    var out = []
+    var removed = false
+    for (var i = 0; i < (leaderboard || []).length; i++) {
+        var entry = leaderboard[i]
+        if (!removed && entry.score === score && entry.endedAt === endedAt) {
+            removed = true
+            continue
+        }
+        out.push(entry)
+    }
+    return out
+}
+
+// Restore the previous snapshot. Undo never raises `best` and never lowers it
+// either; an undone (assisted) game is pulled off the leaderboard.
+function undo(state, settings) {
+    var copy = copyState(state)
+    if (!canUndo(state, settings)) {
+        return { state: copy, undone: false }
+    }
+    var history = state.history
+    var prev = copySnapshot(history[history.length - 1])
+    var next = copyState(state)
+    next.cells = prev.cells
+    next.score = prev.score
+    next.moves = prev.moves
+    next.status = prev.status
+    next.keepPlaying = prev.keepPlaying
+    next.history = history.slice(0, history.length - 1)
+    next.undoCount = normalizeCount(state.undoCount) + 1
+    next.assisted = true
+    next.spawned = -1
+    next.merged = []
+    next.gain = 0
+    next.transitions = []
+    if (state.recorded === true) {
+        next.recorded = false
+        next.leaderboard = removeLeaderboardEntry(state.leaderboard, state.score, state.lastRecordedAt)
+        next.lastRank = 0
+        next.lastRecordedAt = 0
+    }
+    return { state: next, undone: true }
+}
+
+function profileToJson(profile) {
+    var sizes = {}
+    for (var i = 0; i < SUPPORTED_SIZES.length; i++) {
+        var size = SUPPORTED_SIZES[i]
+        var game = profile.sizes[String(size)]
+        sizes[String(size)] = gameToJson(game ? game : emptyState(0, size), true)
+    }
+    return {
+        version: VERSION,
+        activeSize: profile.activeSize,
+        settings: sanitizeSettings(profile.settings),
+        sizes: sizes
+    }
+}
+
+// Serialize the whole profile. If the histories would push the payload past
+// the helper's 64 KiB cap, drop the oldest snapshot from the longest history
+// and retry until it fits (the boards, bests and leaderboards always survive).
+function serializeProfile(profile) {
+    var copy = copyProfile(profile)
+    var text = JSON.stringify(profileToJson(copy))
+    var guard = 0
+    while (text.length > SERIALIZE_LIMIT && guard < 1000) {
+        var longestKey = null
+        var longestLen = 0
+        for (var i = 0; i < SUPPORTED_SIZES.length; i++) {
+            var key = String(SUPPORTED_SIZES[i])
+            var len = copy.sizes[key].history.length
+            if (len > longestLen) {
+                longestLen = len
+                longestKey = key
+            }
+        }
+        if (!longestKey) {
+            break
+        }
+        copy.sizes[longestKey].history.shift()
+        text = JSON.stringify(profileToJson(copy))
+        guard += 1
+    }
+    return text
+}
+
+// Parse a profile, migrating a legacy v1/v2 single game into the 4×4 board.
+function parseProfile(text) {
+    if (typeof text !== "string") {
+        return null
+    }
+    if (text.length === 0 || text.length > MAX_STATE_BYTES) {
+        return null
+    }
+    var data
+    try {
+        data = JSON.parse(text)
+    } catch (error) {
+        return null
+    }
+    if (!data || typeof data !== "object") {
+        return null
+    }
+
+    if (data.version === 1 || data.version === 2) {
+        var legacy = parseGameObject(data)
+        if (!legacy) {
+            return null
+        }
+        var migrated = emptyProfile()
+        migrated.sizes[String(legacy.size)] = legacy
+        migrated.activeSize = legacy.size
+        return migrated
+    }
+    if (data.version !== VERSION) {
+        return null
+    }
+    if (!data.sizes || typeof data.sizes !== "object") {
+        return null
+    }
+
+    var profile = emptyProfile()
+    profile.activeSize = isSupportedSize(data.activeSize) ? Number(data.activeSize) : SIZE
+    profile.settings = sanitizeSettings(data.settings)
+    for (var i = 0; i < SUPPORTED_SIZES.length; i++) {
+        var size = SUPPORTED_SIZES[i]
+        var raw = data.sizes[String(size)]
+        var parsed = raw ? parseGameObject(raw) : null
+        if (parsed && parsed.size === size) {
+            profile.sizes[String(size)] = parsed
+        }
+    }
+    return profile
 }
 
 // --- display helpers (§3.1) -----------------------------------------------

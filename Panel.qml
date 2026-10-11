@@ -26,7 +26,13 @@ Panel {
   property var hostWidget: null
   readonly property var barIdentity: hostWidget || root
 
-  property var game: Game.newGame(0, Math.random)
+  // The profile carries every board size (its own game, best and leaderboard)
+  // plus the shared settings. `game` is the active board, derived from it, so
+  // the rendering code keeps reading root.game as before.
+  property var profile: Game.emptyProfile()
+  readonly property var game: Game.activeGame(root.profile)
+  readonly property var gameSettings: root.profile.settings
+  readonly property bool canUndo: Game.canUndo(root.game, root.gameSettings)
 
   // Per-user state under XDG state, not shell.json: updateEntryInline rewrites
   // the user's shell.json, which must not happen on every move (§5.2). This
@@ -58,7 +64,8 @@ Panel {
   property int localRevision: 0
   property int readRevision: 0
 
-  readonly property int boardGap: Style.space(6)
+  // Gutter shrinks a little on bigger boards so the cells keep room.
+  readonly property int boardGap: Math.max(Style.space(2), Math.round(Style.space(6) * 4 / Math.max(1, root.game.size)))
 
   // Slide animation + score-gain timings (§4.2).
   readonly property int slideMs: 90
@@ -131,7 +138,7 @@ Panel {
     if (!result.moved) return
     root.ghosts = result.state.transitions
     root.sliding = true
-    root.game = result.state
+    root.profile = Game.setGame(root.profile, result.state)
     root.persist()
     slideTimer.restart()
     if (result.state.gain > 0) root.pulseGain(result.state.gain)
@@ -159,11 +166,7 @@ Panel {
   }
 
   function tileFontSize(value) {
-    var digits = String(value).length
-    if (digits <= 2) return Style.font.title * 1.6
-    if (digits === 3) return Style.font.title * 1.3
-    if (digits === 4) return Style.font.title * 1.05
-    return Style.font.title * 0.85
+    return Style.font.title * Game.tileFontFactor(value, root.game.size)
   }
 
   function pulseGain(value) {
@@ -176,16 +179,46 @@ Panel {
   function newGame() {
     if (root.sliding) root.finishSlide()
     // Records the current game (if any) to the leaderboard, then starts fresh.
-    root.game = Game.startNewGame(root.game, Math.random, Date.now())
+    var next = Game.startNewGame(root.game, Math.random, Date.now())
+    root.profile = Game.setGame(root.profile, next)
     root.persist()
-    root.setScoreInstantly(root.game.score)
+    root.setScoreInstantly(next.score)
     root.celebratedThisGame = false
   }
 
   function keepGoing() {
-    root.game = Game.keepGoing(root.game)
+    var next = Game.keepGoing(root.game)
+    root.profile = Game.setGame(root.profile, next)
     root.persist()
-    root.setScoreInstantly(root.game.score)
+    root.setScoreInstantly(next.score)
+  }
+
+  // Undo the last move. Also leaves a game over or the win card; the restored
+  // board is marked assisted so it never reaches the leaderboard.
+  function undo() {
+    if (root.showScores) return
+    var result = Game.undo(root.game, root.gameSettings)
+    if (!result.undone) return
+    if (root.sliding) root.finishSlide()
+    root.ghosts = []
+    root.sliding = false
+    root.profile = Game.setGame(root.profile, result.state)
+    root.persist()
+    root.setScoreInstantly(result.state.score)
+  }
+
+  // Switch to the next/previous board size. Every size keeps its own saved
+  // game, best and leaderboard.
+  function switchSize(step) {
+    if (root.sliding) root.finishSlide()
+    var nextSize = Game.cycleSize(root.game.size, step)
+    if (nextSize === root.game.size) return
+    root.profile = Game.setActiveSize(root.profile, nextSize)
+    root.persist()
+    root.ghosts = []
+    root.sliding = false
+    root.setScoreInstantly(Game.activeGame(root.profile).score)
+    root.celebratedThisGame = false
   }
 
   // Loaded by the read helper below. Never writes back (that would loop between
@@ -194,21 +227,22 @@ Panel {
     // Our own write (or a prior load) echoed back: nothing changed, and
     // re-applying would cut the score count-up and re-arm the celebration.
     if (text === root.lastStateText) return
-    var parsed = Game.parseState(text)
-    var next = parsed ? parsed : Game.newGame(0, Math.random)
+    var parsed = Game.parseProfile(text)
+    var next = parsed ? parsed : Game.emptyProfile()
+    var nextGame = Game.activeGame(next)
     // Only a genuinely different game re-arms the once-per-game celebration;
     // another monitor's move in the same game keeps it spent.
-    var differentGame = !Game.sameGame(root.game, next)
-    root.game = next
+    var differentGame = !Game.sameGame(root.game, nextGame)
+    root.profile = next
     root.lastStateText = text
     if (differentGame) root.celebratedThisGame = false
-    root.setScoreInstantly(root.game.score)
+    root.setScoreInstantly(nextGame.score)
   }
 
   // Written only after a user action that changed state. One write at a time; a
   // newer state queued while writing replaces the pending one (latest wins).
   function persist() {
-    var text = Game.serializeState(root.game)
+    var text = Game.serializeProfile(root.profile)
     root.lastStateText = text
     root.localRevision += 1
     if (root.writeInFlight) {
@@ -355,6 +389,14 @@ Panel {
     }
   }
 
+  // Ctrl+Z is a standard undo accelerator. A window Shortcut handles it; the
+  // PanelKeyCatcher only reports single-character text keys.
+  Shortcut {
+    sequence: "Ctrl+Z"
+    enabled: root.opened
+    onActivated: root.undo()
+  }
+
   KeyboardPanel {
     id: panel
     anchorItem: root.anchorItem
@@ -392,6 +434,9 @@ Panel {
         else if (key === "s") root.doMove("down")
         else if (key === "d") root.doMove("right")
         else if (key === "r") root.newGame()
+        else if (key === "u") root.undo()
+        else if (key === "[") root.switchSize(-1)
+        else if (key === "]") root.switchSize(1)
         else if (key === "t") root.showScores = true
         else if (key === "c" && root.game.status === Game.STATUS_WON) root.keepGoing()
       }
@@ -413,15 +458,70 @@ Panel {
           anchors.horizontalCenter: parent.horizontalCenter
           height: Style.space(44)
 
-          Text {
+          // Wordmark + board-size badge. Clicking it (or pressing `[` / `]`)
+          // cycles the supported sizes; every size is its own saved game.
+          Item {
             id: wordmark
             anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
-            text: "2048"
-            color: Color.accent
-            font.family: Style.font.family
-            font.bold: true
-            font.pixelSize: Style.font.title * 1.4
+            width: brandColumn.implicitWidth
+            height: Style.space(44)
+
+            Column {
+              id: brandColumn
+              anchors.left: parent.left
+              anchors.verticalCenter: parent.verticalCenter
+              spacing: 0
+
+              Text {
+                text: "2048"
+                color: Color.accent
+                font.family: Style.font.family
+                font.bold: true
+                font.pixelSize: Style.font.title * 1.4
+              }
+
+              Text {
+                text: root.game.size + "×" + root.game.size
+                color: Color.foreground
+                opacity: 0.7
+                font.family: Style.font.family
+                font.pixelSize: Style.font.bodySmall
+              }
+            }
+
+            MouseArea {
+              id: sizeMouse
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onClicked: {
+                keyCatcher.forceActiveFocus()
+                root.switchSize(1)
+              }
+            }
+
+            ToolTip {
+              visible: sizeMouse.containsMouse
+              text: "Board size — click or [ ]"
+              delay: 400
+              padding: 0
+              background: BorderSurface {
+                color: Color.tooltip.background
+                borderSpec: Border.localOrSurfaceSpec("tooltip", "border", Color.tooltip.border, Color.tooltip.border, Math.max(1, Style.normalBorderWidth))
+                radius: 0
+              }
+              contentItem: Text {
+                text: "Board size — click or [ ]"
+                color: Color.tooltip.text
+                font.family: Style.font.family
+                font.pixelSize: Style.font.bodySmall
+                leftPadding: Style.spacing.controlPaddingX
+                rightPadding: Style.spacing.controlPaddingX
+                topPadding: Style.spacing.controlPaddingY
+                bottomPadding: Style.spacing.controlPaddingY
+              }
+            }
           }
 
           Row {
@@ -654,7 +754,8 @@ Panel {
           width: Math.min(parent.width, Style.space(300))
           height: width
 
-          readonly property real cellSize: (width - root.boardGap * 5) / 4
+          readonly property int gridSize: root.game.size
+          readonly property real cellSize: (width - root.boardGap * (gridSize + 1)) / gridSize
 
           Rectangle {
             anchors.fill: parent
@@ -664,11 +765,11 @@ Panel {
             Grid {
               anchors.fill: parent
               anchors.margins: root.boardGap
-              columns: 4
+              columns: boardFrame.gridSize
               spacing: root.boardGap
 
               Repeater {
-                model: 16
+                model: boardFrame.gridSize * boardFrame.gridSize
 
                 Item {
                   id: cellRoot
@@ -767,6 +868,7 @@ Panel {
                   required property var modelData
 
                   readonly property real step: boardFrame.cellSize + root.boardGap
+                  readonly property int gridSize: boardFrame.gridSize
 
                   width: boardFrame.cellSize
                   height: boardFrame.cellSize
@@ -783,15 +885,15 @@ Panel {
                   }
 
                   NumberAnimation on x {
-                    from: (ghost.modelData.from % 4) * ghost.step
-                    to: (ghost.modelData.to % 4) * ghost.step
+                    from: (ghost.modelData.from % ghost.gridSize) * ghost.step
+                    to: (ghost.modelData.to % ghost.gridSize) * ghost.step
                     duration: root.slideMs
                     easing.type: Easing.OutCubic
                   }
 
                   NumberAnimation on y {
-                    from: Math.floor(ghost.modelData.from / 4) * ghost.step
-                    to: Math.floor(ghost.modelData.to / 4) * ghost.step
+                    from: Math.floor(ghost.modelData.from / ghost.gridSize) * ghost.step
+                    to: Math.floor(ghost.modelData.to / ghost.gridSize) * ghost.step
                     duration: root.slideMs
                     easing.type: Easing.OutCubic
                   }
@@ -871,6 +973,16 @@ Panel {
                     onClicked: {
                       keyCatcher.forceActiveFocus()
                       root.keepGoing()
+                    }
+                  }
+
+                  Button {
+                    visible: root.canUndo
+                    text: "Undo"
+                    foreground: Color.foreground
+                    onClicked: {
+                      keyCatcher.forceActiveFocus()
+                      root.undo()
                     }
                   }
 
@@ -1164,6 +1276,62 @@ Panel {
               }
             }
           }
+
+          // Assisted marker: a small undo chip shown while a game that used
+          // undo is in play, so the player knows it will not be ranked.
+          Rectangle {
+            id: assistedBadge
+            anchors.top: parent.top
+            anchors.right: parent.right
+            anchors.margins: Style.space(6)
+            visible: root.game.assisted === true
+              && root.game.status === Game.STATUS_PLAYING
+              && !root.showScores
+            width: assistedLabel.implicitWidth + Style.space(10)
+            height: Style.space(16)
+            radius: Style.cornerRadius > 0 ? Style.space(8) : 0
+            color: Color.popups.background
+            border.width: Math.max(1, Style.normalBorderWidth)
+            border.color: Color.accent
+
+            Text {
+              id: assistedLabel
+              anchors.centerIn: parent
+              text: "↺ assisted"
+              color: Color.accent
+              font.family: Style.font.family
+              font.bold: true
+              font.pixelSize: Style.font.caption
+            }
+
+            MouseArea {
+              id: assistedMouse
+              anchors.fill: parent
+              hoverEnabled: true
+            }
+
+            ToolTip {
+              visible: assistedMouse.containsMouse
+              text: "Undo used — this game won't be ranked"
+              delay: 400
+              padding: 0
+              background: BorderSurface {
+                color: Color.tooltip.background
+                borderSpec: Border.localOrSurfaceSpec("tooltip", "border", Color.tooltip.border, Color.tooltip.border, Math.max(1, Style.normalBorderWidth))
+                radius: 0
+              }
+              contentItem: Text {
+                text: "Undo used — this game won't be ranked"
+                color: Color.tooltip.text
+                font.family: Style.font.family
+                font.pixelSize: Style.font.bodySmall
+                leftPadding: Style.spacing.controlPaddingX
+                rightPadding: Style.spacing.controlPaddingX
+                topPadding: Style.spacing.controlPaddingY
+                bottomPadding: Style.spacing.controlPaddingY
+              }
+            }
+          }
         }
 
         Item { width: 1; height: Style.space(10) }
@@ -1177,8 +1345,9 @@ Panel {
           Repeater {
             model: root.showScores
               ? [{ key: "T", label: "board" }, { key: "Esc", label: "back" }]
-              : [{ key: "↑↓←→", label: "move" }, { key: "R", label: "new" },
-                 { key: "T", label: "scores" }, { key: "Esc", label: "close" }]
+              : [{ key: "↑↓←→", label: "move" }, { key: "U", label: "undo" },
+                 { key: "R", label: "new" }, { key: "T", label: "scores" },
+                 { key: "Esc", label: "close" }]
 
             Rectangle {
               required property var modelData

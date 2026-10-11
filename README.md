@@ -13,7 +13,8 @@ The classic 2048 sliding-tile game in a keyboard-driven, theme-aware Omarchy bar
 
 ## Features
 
-- Classic 4×4 sliding-tile game with the standard merge rules.
+- Classic sliding-tile game with the standard merge rules, on boards from **3×3 to 8×8** (3, 4, 5, 6 and 8) — each size keeps its own saved game, best score and top-10 leaderboard.
+- **Undo** the last 50 moves with `U` or `Ctrl+Z`. Undo also lifts you out of a game over or the win card. A game that used undo is marked `assisted` and never enters the leaderboard.
 - Tiles slide between cells and merged tiles pop; a `+N` indicator floats up on merges, and the score counts up instead of jumping.
 - Theme-aware palette with automatic text contrast — every color comes from the active Omarchy theme, and the tile text color is chosen by WCAG contrast (no hard-coded colors).
 - Header with score and best-score cards; beating your best briefly highlights the BEST card.
@@ -41,6 +42,8 @@ No other dependencies.
 |---|---|
 | Arrow keys / `H` `J` `K` `L` / `W` `A` `S` `D` | Move tiles |
 | Drag or swipe on the board | Move tiles (mouse / touchpad) |
+| `U` or `Ctrl+Z` | Undo the last move |
+| `[` / `]` or click the size badge | Switch board size (3×3 – 8×8) |
 | `R` | New game |
 | `T` | Top scores |
 | `Enter` / `Space` | Keep going after 2048; new game after game over |
