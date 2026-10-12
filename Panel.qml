@@ -1134,8 +1134,6 @@ Panel {
         scale: root.uiScale * (0.97 + 0.03 * root.entranceT)
         transformOrigin: Item.Top
 
-        // Top margin so the gain label has room above the header.
-        Item { width: 1; height: Style.space(8) }
 
         // 1. Header: the live score is the hero; the size chip opens the inline
         //    picker and the action group (undo / new game) sits on the right.
@@ -1585,7 +1583,7 @@ Panel {
         Item {
           id: boardFrame
           anchors.horizontalCenter: parent.horizontalCenter
-          width: Math.min(parent.width, Style.space(300))
+          width: parent.width
           height: width
 
           // Invalid-move shake writes here (a Translate keeps the anchors intact).
@@ -3155,11 +3153,28 @@ Panel {
 
         Item { width: 1; height: Style.space(10) }
 
-        // 5. Footer: centred key chips.
+        // 5. Footer: key chips spread across the same width as the board.
         Row {
           id: footerChips
+          width: boardFrame.width
           anchors.horizontalCenter: parent.horizontalCenter
-          spacing: Style.space(6)
+          readonly property int chipCount: {
+            var n = 0
+            for (var i = 0; i < children.length; i++)
+              if (children[i].modelData !== undefined) n++
+            return n
+          }
+          readonly property real contentSum: {
+            var sum = 0
+            for (var i = 0; i < children.length; i++) {
+              var w = children[i].width
+              if (children[i].modelData !== undefined && isFinite(w)) sum += w
+            }
+            return sum
+          }
+          spacing: chipCount > 1
+            ? Math.max(Style.space(6), (width - contentSum) / (chipCount - 1))
+            : 0
 
           Repeater {
             model: root.footerChips()
