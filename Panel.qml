@@ -889,7 +889,7 @@ Panel {
   Process {
     id: mergeSound
     property int rate: 48000
-    command: ["pw-play", "--rate", "" + rate, root.soundPath]
+    command: ["timeout", "-k", "1", "5", "pw-play", "--rate", "" + rate, root.soundPath]
     running: false
   }
 
