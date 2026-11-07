@@ -115,6 +115,7 @@ o.bind("SUPER + ALT + P", "2048 stats", "omarchy-shell pwnsxb.2048 page stats")
 
 ```sh
 node tests/run-model-tests.js
+node tests/run-icon-tests.js
 python3 -m unittest discover -s tests -v
 omarchy plugin validate .
 /usr/lib/qt6/bin/qmllint -I /usr/share/omarchy/shell BarWidget.qml Panel.qml

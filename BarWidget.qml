@@ -3,6 +3,7 @@ import Quickshell
 import Quickshell.Io
 import qs.Commons
 import qs.Ui
+import "helpers/icon_grid.js" as IconGrid
 
 // Bar slot for the 2048 game. Unit 0 is scaffold only: the slot draws a 2x2
 // tile glyph and toggles the popup, but carries no board or game state yet.
@@ -90,56 +91,41 @@ BarWidget {
     }
   }
 
-  // Four rounded tiles in a 2x2 grid, one in the theme accent, echoing a 2048
-  // board without any game state behind it. Sized off the icon canvas so it
-  // scales with the button.
+  // Four equal square tiles in a 2x2 grid, one in the theme accent, echoing a
+  // 2048 board without any game state behind it.
+  //
+  // Since Omarchy 4.5 the bar measures a custom icon's painted bounds and fits
+  // them to Style.bar.iconSize, so drawing fractional cells there shears the
+  // glyph into unequal tiles and a wider gap. The glyph therefore declares a
+  // box exactly as large as the target icon and draws whole-pixel tiles inside
+  // it: the fit scale lands on 1 and every edge stays on a pixel.
   Component {
     id: tileGlyph
 
-    Item {
-      anchors.fill: parent
+    Rectangle {
+      id: glyph
+      readonly property var grid: IconGrid.grid(Style.bar.iconSize)
+      readonly property int tileRadius: Style.cornerRadius > 0 ? Math.max(1, Math.round(grid.tile * 0.2)) : 0
 
-      readonly property real cell: Math.max(1, Math.min(width, height) * 0.40)
-      readonly property real spacing: Math.max(1, Math.min(width, height) * 0.12)
-      readonly property real gridSize: cell * 2 + spacing
-      readonly property real originX: (width - gridSize) / 2
-      readonly property real originY: (height - gridSize) / 2
-      readonly property real tileRadius: Style.cornerRadius > 0 ? Math.max(1, Math.round(cell * 0.22)) : 0
+      // The box is the optical footprint the bar measures; it stays transparent
+      // so the tiles carry all the ink.
+      width: grid.size
+      height: grid.size
+      color: "transparent"
 
-      Rectangle {
-        x: parent.originX
-        y: parent.originY
-        width: parent.cell
-        height: parent.cell
-        radius: parent.tileRadius
-        color: button.foreground
-      }
+      Repeater {
+        model: glyph.grid.rects
 
-      Rectangle {
-        x: parent.originX + parent.cell + parent.spacing
-        y: parent.originY
-        width: parent.cell
-        height: parent.cell
-        radius: parent.tileRadius
-        color: button.foreground
-      }
-
-      Rectangle {
-        x: parent.originX
-        y: parent.originY + parent.cell + parent.spacing
-        width: parent.cell
-        height: parent.cell
-        radius: parent.tileRadius
-        color: button.foreground
-      }
-
-      Rectangle {
-        x: parent.originX + parent.cell + parent.spacing
-        y: parent.originY + parent.cell + parent.spacing
-        width: parent.cell
-        height: parent.cell
-        radius: parent.tileRadius
-        color: Color.accent
+        delegate: Rectangle {
+          required property var modelData
+          required property int index
+          x: modelData.x
+          y: modelData.y
+          width: modelData.w
+          height: modelData.h
+          radius: glyph.tileRadius
+          color: index === 3 ? Color.accent : button.foreground
+        }
       }
     }
   }
